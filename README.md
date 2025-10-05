@@ -44,9 +44,10 @@ MAML learns an initialization of model parameters that enables rapid adaptation 
 ```
 meta-learning-from-scratch/
 ├── MAML.py                      # Core MAML algorithm implementation
-├── evaluate_maml.py             # Evaluation utilities and visualization
+├── evaluate_maml.py             # MAML-specific evaluation functions
 ├── load_omniglot.py             # Dataset loaders (easily adaptable)
 ├── utils/
+│   ├── evaluate.py              # Algorithm-agnostic visualization utilities
 │   └── visualize_omniglot.py    # Dataset visualization tools
 ├── maml_on_omniglot.ipynb       # Complete tutorial notebook
 └── README.md                    # This file
@@ -83,7 +84,8 @@ unzip images_evaluation.zip -d omniglot/
 import torch
 from MAML import train_maml, ModelAgnosticMetaLearning
 from load_omniglot import OmniglotDataset, OmniglotTaskDataset
-from evaluate_maml import evaluate_maml, plot_evaluation_results
+from evaluate_maml import evaluate_maml
+from utils.evaluate import plot_evaluation_results, plot_training_progress
 from torch.utils.data import DataLoader
 
 # 1. Load your dataset
@@ -138,11 +140,24 @@ plot_evaluation_results(eval_results)
 
 ### `evaluate_maml.py`
 
-**Evaluation Functions**:
-- `evaluate_maml(model, maml, eval_dataloader, num_classes)`: Comprehensive evaluation on test tasks
-  - Returns: accuracy before/after adaptation, improvement, per-task metrics, loss statistics
-  
-**Visualization Functions**:
+**MAML-Specific Evaluation**:
+- `evaluate_maml(model, maml, eval_dataloader, num_classes)`: Comprehensive MAML evaluation on test tasks
+  - Measures accuracy before and after adaptation
+  - Returns: accuracy metrics, improvement, per-task statistics, loss values
+  - Computes baseline and random baseline for comparison
+
+**Features**:
+- MAML-specific inner loop adaptation
+- Detailed performance metrics
+- Statistical analysis (mean, std, improvement)
+- Progress tracking with tqdm
+
+### `utils/evaluate.py`
+
+**Algorithm-Agnostic Visualization Functions**:
+
+These functions work with **any meta-learning algorithm** (MAML, Reptile, Prototypical Networks, etc.):
+
 - `plot_evaluation_results(eval_results)`: Generate 4-panel evaluation visualization
   - Before vs After adaptation comparison
   - Accuracy distributions
@@ -150,12 +165,15 @@ plot_evaluation_results(eval_results)
   - Loss vs Accuracy correlation
   
 - `plot_training_progress(losses, window_size)`: Training loss curves with smoothing
+  - Raw and smoothed loss curves
+  - Loss distribution histogram
+  - Training statistics summary
 
 **Features**:
-- Dataset-agnostic evaluation
-- Detailed performance metrics
-- Statistical analysis (mean, std, improvement)
-- Professional visualizations
+- Works with any meta-learning algorithm
+- Professional publication-quality plots
+- Customizable figure sizes
+- Automatic statistics computation
 
 ### `load_omniglot.py`
 
