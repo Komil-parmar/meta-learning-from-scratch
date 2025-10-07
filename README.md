@@ -8,48 +8,69 @@ A modular collection of meta-learning algorithm implementations built from scrat
 
 Meta-learning (or "learning to learn") enables models to quickly adapt to new tasks with minimal training data. Unlike traditional machine learning that learns a specific task, meta-learning algorithms learn how to efficiently learn new tasks.
 
-**Current Status**: ✅ MAML Implementation Complete | 🚧 More algorithms coming soon!
+**Current Status**: ✅ MAML & FOMAML Complete | ✅ Meta Dropout Implemented | 🚧 More algorithms coming soon!
 
 ## 🎯 Features
 
 - **Modular Design**: Clean, reusable components that work across different datasets and tasks
 - **Easy Experimentation**: Plug in your own datasets, customize task sampling, and tune hyperparameters
+- **Meta Dropout Support**: Consistent dropout masks for improved few-shot learning performance
 - **Well-Documented**: Comprehensive docstrings, inline comments, and tutorial notebook
 - **Research-Ready**: Built for both learning and experimentation
 
 ## 📚 Algorithms Implemented
 
-### ✅ MAML (Model-Agnostic Meta-Learning)
-*Status: Complete and tested on Omniglot*
+### ✅ Model-Agnostic Meta-Learning (MAML)
+A flexible meta-learning approach that trains a model's initial parameters to enable rapid adaptation to new tasks with just a few gradient steps.
 
-**Paper**: [Model-Agnostic Meta-Learning for Fast Adaptation of Deep Networks](https://arxiv.org/abs/1703.03400) (Finn et al., 2017)
+**Key Features:**
+- Works with any gradient-based model
+- Learns optimal parameter initialization
+- Adapts quickly with minimal data
+- [Original Paper](https://arxiv.org/abs/1703.03400)
 
-MAML learns an initialization of model parameters that enables rapid adaptation to new tasks with just a few gradient steps. The algorithm uses bi-level optimization with inner loop (task adaptation) and outer loop (meta-learning).
+**Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML.md)
 
-**Key Features**:
-- Second-order gradient computation through inner loop
-- Supports any PyTorch model architecture
-- GPU-optimized training with mixed precision support
-- Comprehensive evaluation metrics
+### ✅ First-Order MAML (FOMAML)
+A memory-efficient variant of MAML that omits second-order derivatives, offering:
+- **Faster training**: ~40% faster than full MAML
+- **Lower memory usage**: No need to store computation graph for second derivatives
+- **Comparable performance**: Often matches MAML accuracy with reduced computational cost
+
+**Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML.md)
+
+### ✅ Meta Dropout
+An optimized dropout strategy for meta-learning that maintains consistent dropout masks during inner loop adaptation:
+- **Improved performance**: 80.1% ± 10.48% accuracy vs 78.9% ± 11.5% baseline
+- **Reduced variance**: 16.9% reduction in performance variance
+- **Context manager API**: Clean, exception-safe implementation
+
+**Documentation:** See [Meta Dropout Usage Guide](docs/META_DROPOUT_USAGE.md)
 
 ### 🚧 Coming Soon
-- First-Order MAML (FOMAML)
-- Reptile
 - Prototypical Networks
 - Matching Networks
-- ANIL (Almost No Inner Loop)
+- Reptile
 
 ## 🗂️ Repository Structure
 
 ```
 meta-learning-from-scratch/
-├── MAML.py                      # Core MAML algorithm implementation
+├── MAML.py                      # Core MAML & FOMAML algorithm implementation
+├── SimpleConvNet.py             # CNN model with Meta Dropout support
+├── Meta_Dropout.py              # Meta Dropout layer implementation
 ├── evaluate_maml.py             # MAML-specific evaluation functions
-├── load_omniglot.py             # Dataset loaders (easily adaptable)
+├── test_meta_dropout.py         # Meta Dropout test suite
 ├── utils/
-│   ├── evaluate.py              # Algorithm-agnostic visualization utilities
+│   ├── load_omniglot.py         # Dataset loaders (easily adaptable)
+│   ├── evaluate.py              # Algorithm-agnostic evaluation utilities
 │   └── visualize_omniglot.py    # Dataset visualization tools
-├── maml_on_omniglot.ipynb       # Complete tutorial notebook
+├── docs/
+│   ├── MAML_vs_FOMAML.md        # MAML and FOMAML comparison
+│   └── META_DROPOUT_USAGE.md    # Meta Dropout usage guide
+├── examples/
+│   ├── maml_on_omniglot.ipynb   # Complete tutorial notebook
+│   └── compare_maml_fomaml.py   # MAML vs FOMAML comparison script
 └── README.md                    # This file
 ```
 
@@ -83,8 +104,8 @@ unzip images_evaluation.zip -d omniglot/
 ```python
 import torch
 from MAML import train_maml, ModelAgnosticMetaLearning
-from load_omniglot import OmniglotDataset, OmniglotTaskDataset
-from evaluate_maml import evaluate_maml
+from SimpleConvNet import SimpleConvNet
+from utils.load_omniglot import OmniglotDataset, OmniglotTaskDataset
 from utils.evaluate import plot_evaluation_results, plot_training_progress
 from torch.utils.data import DataLoader
 
@@ -102,16 +123,20 @@ task_dataset = OmniglotTaskDataset(
 
 task_dataloader = DataLoader(task_dataset, batch_size=4, shuffle=True)
 
-# 3. Define your model
-model = YourNeuralNetwork(num_classes=5)
+# 3. Define your model (with optional Meta Dropout)
+model = SimpleConvNet(
+    num_classes=5,
+    dropout_rates=[0.05, 0.10, 0.15, 0.05]  # Validated configuration
+)
 
-# 4. Train with MAML
+# 4. Train with MAML or FOMAML
 model, maml, losses = train_maml(
     model=model,
     task_dataloader=task_dataloader,
-    inner_lr=0.01,      # Task adaptation learning rate
-    outer_lr=0.001,     # Meta-learning rate
-    inner_steps=5       # Adaptation steps per task
+    inner_lr=0.01,          # Task adaptation learning rate
+    outer_lr=0.001,         # Meta-learning rate
+    inner_steps=5,          # Adaptation steps per task
+    first_order=False       # Set True for FOMAML
 )
 
 # 5. Evaluate on test tasks
@@ -124,9 +149,26 @@ plot_evaluation_results(eval_results)
 ### `MAML.py`
 
 **Core Classes**:
-- `ModelAgnosticMetaLearning`: Complete MAML implementation with inner/outer loop optimization
+- `ModelAgnosticMetaLearning`: Complete MAML & FOMAML implementation with inner/outer loop optimization
   - `inner_update(support_data, support_labels)`: Adapt model to a task using support set
   - `forward_with_weights(x, weights)`: Forward pass with custom parameter values
+  - Supports `first_order` flag for FOMAML variant
+
+### `SimpleConvNet.py`
+
+**Core Classes**:
+- `SimpleConvNet`: CNN model with Meta Dropout support
+  - 4 convolutional blocks with optional dropout
+  - `outer_loop_mode()`: Context manager for optimized dropout control
+  - Automatically detected and used by MAML during meta-training
+
+### `Meta_Dropout.py`
+
+**Core Classes**:
+- `MetaDropout`: Dropout layer that maintains consistent masks during task adaptation
+  - `reset_mask()`: Generate new dropout mask (called between tasks)
+  - Batch-size agnostic with automatic broadcasting
+  - See [META_DROPOUT_USAGE.md](docs/META_DROPOUT_USAGE.md) for details
   - `meta_train_step(support_batch, query_batch)`: Single meta-training step on task batch
 
 **Training Function**:

@@ -526,7 +526,13 @@ class ModelAgnosticMetaLearning:
                 query_data = query_data_batch[i]
                 query_labels = query_labels_batch[i]
                 
-                # Inner loop: Get adapted parameters (no gradients through adaptation)
+                # Reset Meta Dropout masks for this task (if model supports it)
+                if hasattr(self.model, 'reset_dropout_masks'):
+                    task_batch_size = support_data.size(0)
+                    self.model.reset_dropout_masks(task_batch_size, device)
+                
+                # Inner loop: Get adapted parameters WITH dropout (train mode)
+                # Model stays in train mode for dropout during adaptation
                 fast_weights = self.inner_update(support_data, support_labels)
                 
                 # Detach fast_weights to prevent backprop through inner loop
@@ -534,9 +540,18 @@ class ModelAgnosticMetaLearning:
                 fast_weights = {name: param.detach().requires_grad_(True) 
                                for name, param in fast_weights.items()}
                 
-                # Outer loop: Compute query loss with adapted parameters
-                query_logits = self.forward_with_weights(query_data, fast_weights)
-                query_loss = F.cross_entropy(query_logits, query_labels)
+                # Outer loop: Compute query loss WITHOUT dropout using context manager
+                # This is Meta Dropout Option 2: dropout only in inner loop
+                # ⚡ ULTRA-OPTIMIZED: Context manager just sets a boolean flag (zero overhead!)
+                if hasattr(self.model, 'outer_loop_mode'):
+                    # Use context manager - automatic cleanup, exception-safe
+                    with self.model.outer_loop_mode():
+                        query_logits = self.forward_with_weights(query_data, fast_weights)
+                        query_loss = F.cross_entropy(query_logits, query_labels)
+                else:
+                    # No Meta Dropout available - use full network
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
                 
                 # Compute gradients w.r.t. fast_weights (not original params)
                 grads = torch.autograd.grad(
@@ -563,12 +578,26 @@ class ModelAgnosticMetaLearning:
                 query_data = query_data_batch[i]
                 query_labels = query_labels_batch[i]
                 
-                # Inner loop adaptation (with computational graph)
+                # Reset Meta Dropout masks for this task (if model supports it)
+                if hasattr(self.model, 'reset_dropout_masks'):
+                    task_batch_size = support_data.size(0)
+                    self.model.reset_dropout_masks(task_batch_size, device)
+                
+                # Inner loop adaptation WITH dropout (train mode)
                 fast_weights = self.inner_update(support_data, support_labels)
                 
-                # Outer loop evaluation
-                query_logits = self.forward_with_weights(query_data, fast_weights)
-                query_loss = F.cross_entropy(query_logits, query_labels)
+                # Outer loop evaluation WITHOUT dropout using context manager
+                # This is Meta Dropout Option 2: dropout only in inner loop
+                # ⚡ ULTRA-OPTIMIZED: Context manager just sets a boolean flag (zero overhead!)
+                if hasattr(self.model, 'outer_loop_mode'):
+                    # Use context manager - automatic cleanup, exception-safe
+                    with self.model.outer_loop_mode():
+                        query_logits = self.forward_with_weights(query_data, fast_weights)
+                        query_loss = F.cross_entropy(query_logits, query_labels)
+                else:
+                    # No Meta Dropout available - use full network
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
                 
                 # Backward pass (accumulates gradients through inner loop)
                 (query_loss / batch_size).backward()
