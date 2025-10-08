@@ -8,7 +8,7 @@ A modular collection of meta-learning algorithm implementations built from scrat
 
 Meta-learning (or "learning to learn") enables models to quickly adapt to new tasks with minimal training data. Unlike traditional machine learning that learns a specific task, meta-learning algorithms learn how to efficiently learn new tasks.
 
-**Current Status**: ✅ MAML & FOMAML Complete | ✅ Meta Dropout Implemented | 🚧 More algorithms coming soon!
+**Current Status**: ✅ MAML & FOMAML Complete | ✅ Embedding-based Meta Networks Complete | ✅ Meta Dropout Implemented | 🚧 More algorithms coming soon!
 
 ## 🎯 Features
 
@@ -47,7 +47,23 @@ An optimized dropout strategy for meta-learning that maintains consistent dropou
 
 **Documentation:** See [Meta Dropout Usage Guide](docs/META_DROPOUT_USAGE.md)
 
+### ✅ Embedding-based Meta Networks
+A metric-based meta-learning approach that generates task-specific embeddings for fast adaptation. Unlike model-based approaches, it uses similarity-based classification for few-shot learning.
+
+**Key Features:**
+- **Single forward pass**: No gradient-based adaptation needed at test time
+- **Metric-based learning**: Uses embeddings and similarity for classification
+- **Fast inference**: ~50ms per task vs gradient-based methods
+- **Meta Dropout support**: Consistent masks across support/query sets improve performance by +1.5%
+
+**Performance:** 77.3% ± 11.9% accuracy on 5-way 1-shot Omniglot with Meta Dropout
+
+**Documentation:** See [Meta Networks Overview](docs/META_NETWORKS_OVERVIEW.md) and [Meta Dropout in Meta Networks](docs/META_DROPOUT_IN_META_NETWORKS.md)
+
+**Note:** This is the Embedding-based variant (Metric-based Meta Learning). The original Meta Networks (Model-based) will be added next.
+
 ### 🚧 Coming Soon
+- Original Meta Networks (Model-based variant)
 - Prototypical Networks
 - Matching Networks
 - Reptile
@@ -57,19 +73,24 @@ An optimized dropout strategy for meta-learning that maintains consistent dropou
 ```
 meta-learning-from-scratch/
 ├── MAML.py                      # Core MAML & FOMAML algorithm implementation
+├── EB_Meta_Network.py           # Embedding-based Meta Networks implementation
 ├── SimpleConvNet.py             # CNN model with Meta Dropout support
 ├── Meta_Dropout.py              # Meta Dropout layer implementation
 ├── evaluate_maml.py             # MAML-specific evaluation functions
 ├── test_meta_dropout.py         # Meta Dropout test suite
+├── test_meta_network_dropout.py # Meta Networks with Meta Dropout tests
 ├── utils/
 │   ├── load_omniglot.py         # Dataset loaders (easily adaptable)
 │   ├── evaluate.py              # Algorithm-agnostic evaluation utilities
 │   └── visualize_omniglot.py    # Dataset visualization tools
 ├── docs/
 │   ├── MAML_vs_FOMAML.md        # MAML and FOMAML comparison
-│   └── META_DROPOUT_USAGE.md    # Meta Dropout usage guide
+│   ├── META_DROPOUT_USAGE.md    # Meta Dropout usage guide
+│   ├── META_NETWORKS_OVERVIEW.md        # Meta Networks architecture guide
+│   └── META_DROPOUT_IN_META_NETWORKS.md # Meta Dropout integration details
 ├── examples/
-│   ├── maml_on_omniglot.ipynb   # Complete tutorial notebook
+│   ├── maml_on_omniglot.ipynb   # Complete MAML tutorial notebook
+│   ├── embedding_based_meta_network.ipynb # Meta Networks tutorial
 │   └── compare_maml_fomaml.py   # MAML vs FOMAML comparison script
 └── README.md                    # This file
 ```
@@ -100,6 +121,8 @@ unzip images_evaluation.zip -d omniglot/
 ```
 
 ### Basic Usage
+
+#### Training MAML/FOMAML
 
 ```python
 import torch
@@ -144,118 +167,99 @@ eval_results = evaluate_maml(model, maml, test_dataloader, num_classes=5)
 plot_evaluation_results(eval_results)
 ```
 
+#### Training Embedding-based Meta Networks
+
+```python
+from EB_Meta_Network import MetaNetwork
+from utils.evaluate import evaluate_model
+
+# 1. Setup dataset (same as above)
+# 2. Define Meta Network with Meta Dropout
+meta_model = MetaNetwork(
+    embedding_dim=64,
+    hidden_dim=128,
+    num_classes=5,
+    dropout_rates=[0.05, 0.10, 0.15],  # Meta Dropout rates
+    dropout_query=True  # Apply dropout to query embeddings
+)
+
+# 3. Train Meta Network (standard PyTorch training loop)
+optimizer = torch.optim.Adam(meta_model.parameters(), lr=0.001)
+criterion = torch.nn.CrossEntropyLoss()
+
+for epoch in range(100):
+    for batch in task_dataloader:
+        support_data, support_labels, query_data, query_labels = batch
+        
+        # Forward pass
+        logits = meta_model(support_data, support_labels, query_data)
+        loss = criterion(logits, query_labels)
+        
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+# 4. Evaluate (single forward pass, no adaptation needed)
+accuracy = evaluate_model(meta_model, test_dataloader)
+```
+
 ## 📖 Module Documentation
 
-### `MAML.py`
+### Core Algorithm Implementations
 
-**Core Classes**:
-- `ModelAgnosticMetaLearning`: Complete MAML & FOMAML implementation with inner/outer loop optimization
-  - `inner_update(support_data, support_labels)`: Adapt model to a task using support set
-  - `forward_with_weights(x, weights)`: Forward pass with custom parameter values
-  - Supports `first_order` flag for FOMAML variant
+**`MAML.py`** - Model-Agnostic Meta-Learning
+- Complete MAML & FOMAML implementation with inner/outer loop optimization
+- Supports first-order approximation for memory efficiency
+- GPU optimized with gradient clipping and batch processing
 
-### `SimpleConvNet.py`
+**`EB_Meta_Network.py`** - Embedding-based Meta Networks
+- Metric-based meta-learning with single forward pass inference
+- EmbeddingNetwork (CNN) + MetaLearner (U, V, e matrices) architecture
+- Integrated Meta Dropout support with automatic mask management
 
-**Core Classes**:
-- `SimpleConvNet`: CNN model with Meta Dropout support
-  - 4 convolutional blocks with optional dropout
-  - `outer_loop_mode()`: Context manager for optimized dropout control
-  - Automatically detected and used by MAML during meta-training
+**`SimpleConvNet.py`** - CNN Model with Meta Dropout
+- 4-layer convolutional network optimized for few-shot learning
+- Meta Dropout integration with context manager API
+- Compatible with both MAML and Meta Networks
 
-### `Meta_Dropout.py`
+**`Meta_Dropout.py`** - Consistent Dropout for Meta-Learning
+- Maintains consistent dropout masks during task adaptation
+- Batch-size agnostic with automatic broadcasting
+- Significant performance improvements across algorithms
 
-**Core Classes**:
-- `MetaDropout`: Dropout layer that maintains consistent masks during task adaptation
-  - `reset_mask()`: Generate new dropout mask (called between tasks)
-  - Batch-size agnostic with automatic broadcasting
-  - See [META_DROPOUT_USAGE.md](docs/META_DROPOUT_USAGE.md) for details
-  - `meta_train_step(support_batch, query_batch)`: Single meta-training step on task batch
+### Evaluation and Utilities
 
-**Training Function**:
-- `train_maml(model, task_dataloader, ...)`: High-level training pipeline with progress tracking and loss visualization
+**`evaluate_maml.py`** - MAML-specific evaluation with before/after adaptation metrics
 
-**Key Features**:
-- Second-order gradient computation for true MAML
-- Gradient clipping for stability
-- GPU memory optimized batch processing
-- Compatible with any PyTorch model
+**`utils/evaluate.py`** - Algorithm-agnostic visualization and analysis tools
 
-### `evaluate_maml.py`
+**`utils/load_omniglot.py`** - Dataset loading with configurable N-way K-shot task generation
 
-**MAML-Specific Evaluation**:
-- `evaluate_maml(model, maml, eval_dataloader, num_classes)`: Comprehensive MAML evaluation on test tasks
-  - Measures accuracy before and after adaptation
-  - Returns: accuracy metrics, improvement, per-task statistics, loss values
-  - Computes baseline and random baseline for comparison
+**`utils/visualize_omniglot.py`** - Dataset exploration and task visualization
 
-**Features**:
-- MAML-specific inner loop adaptation
-- Detailed performance metrics
-- Statistical analysis (mean, std, improvement)
-- Progress tracking with tqdm
+### Testing
 
-### `utils/evaluate.py`
+**`test_meta_dropout.py`** - Meta Dropout functionality tests
 
-**Algorithm-Agnostic Visualization Functions**:
+**`test_meta_network_dropout.py`** - Meta Networks with Meta Dropout integration tests
 
-These functions work with **any meta-learning algorithm** (MAML, Reptile, Prototypical Networks, etc.):
+## 🎓 Tutorial Notebooks
 
-- `plot_evaluation_results(eval_results)`: Generate 4-panel evaluation visualization
-  - Before vs After adaptation comparison
-  - Accuracy distributions
-  - Per-task improvement histogram
-  - Loss vs Accuracy correlation
-  
-- `plot_training_progress(losses, window_size)`: Training loss curves with smoothing
-  - Raw and smoothed loss curves
-  - Loss distribution histogram
-  - Training statistics summary
+**`maml_on_omniglot.ipynb`** - Complete MAML walkthrough:
+1. Dataset exploration and task visualization
+2. Model architecture and Meta Dropout integration
+3. MAML training with step-by-step explanations
+4. Evaluation and performance analysis
+5. Results visualization and interpretation
 
-**Features**:
-- Works with any meta-learning algorithm
-- Professional publication-quality plots
-- Customizable figure sizes
-- Automatic statistics computation
+**`embedding_based_meta_network.ipynb`** - Meta Networks tutorial:
+1. Understanding metric-based meta-learning
+2. Meta Networks architecture and fast weight generation
+3. Training with Meta Dropout for improved performance
+4. Comparison with MAML and analysis of results
 
-### `load_omniglot.py`
-
-**Dataset Classes**:
-- `OmniglotDataset(data_path)`: Load Omniglot character classes
-  - Returns character images and class indices
-  - Supports both background and evaluation splits
-  
-- `OmniglotTaskDataset(omniglot_dataset, n_way, k_shot, k_query, num_tasks)`: Generate N-way K-shot tasks
-  - Randomly samples character classes
-  - Splits into support (training) and query (test) sets
-  - Configurable task difficulty
-
-**Key Features**:
-- Easy to adapt for other datasets (just follow the same structure)
-- Automatic task sampling
-- Consistent support/query split
-
-### `utils/visualize_omniglot.py`
-
-**Visualization Functions**:
-- `visualize_task_sample(task_dataset, task_idx)`: Display a complete task with support and query sets
-- `visualize_character_variations(dataset, num_chars, max_examples)`: Show handwriting variations within classes
-
-**Features**:
-- Clear task structure visualization
-- Educational plots for understanding few-shot learning
-- Customizable display parameters
-
-## 🎓 Tutorial Notebook
-
-The `maml_on_omniglot.ipynb` notebook provides a complete walkthrough:
-
-1. **Dataset Exploration**: Visualize Omniglot characters and task structure
-2. **Model Architecture**: Simple ConvNet implementation
-3. **MAML Training**: Step-by-step training with explanations
-4. **Evaluation**: Performance analysis on unseen character classes
-5. **Results Visualization**: Comprehensive plots and metrics
-
-**Perfect for**: Learning meta-learning concepts, understanding MAML, adapting to your own problems
+**Perfect for**: Learning meta-learning concepts, understanding different approaches, adapting to your own problems
 
 ## 📊 Expected Results (5-way 1-shot on Omniglot)
 
