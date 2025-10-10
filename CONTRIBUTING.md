@@ -4,14 +4,14 @@ Thank you for your interest in contributing to this meta-learning repository! Th
 
 ## 📋 Table of Contents
 
-- [Code of Conduct](#code-of-conduct)
-- [How Can I Contribute?](#how-can-i-contribute)
-- [Project Structure](#project-structure)
-- [Development Guidelines](#development-guidelines)
-- [Pull Request Process](#pull-request-process)
-- [Documentation Standards](#documentation-standards)
-- [Testing Requirements](#testing-requirements)
-- [Getting Help](#getting-help)
+- [Code of Conduct](#-code-of-conduct)
+- [How Can I Contribute?](#-how-can-i-contribute)
+- [Project Structure](#️-project-structure)
+- [Development Guidelines](#-development-guidelines)
+- [Pull Request Process](#-pull-request-process)
+- [Documentation Standards](#-documentation-standards)
+- [Testing Requirements](#-testing-requirements)
+- [Getting Help](#-getting-help)
 
 ---
 
@@ -965,4 +965,3 @@ jupyter nbconvert --execute examples/notebook.ipynb  # Test notebook
 - [ ] Notebooks verified (if applicable)
 - [ ] No breaking changes (or documented)
 - [ ] References included (for new algorithms)
-
