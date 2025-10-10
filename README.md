@@ -136,9 +136,14 @@ meta-learning-from-scratch/
 git clone https://github.com/yourusername/meta-learning-from-scratch.git
 cd meta-learning-from-scratch
 
-# Install dependencies
-pip install torch torchvision numpy matplotlib pillow tqdm
+# Install dependencies (recommended)
+pip install -r requirements.txt
+
+# Or install manually
+pip install torch numpy matplotlib pillow tqdm
 ```
+
+> **Note:** The `requirements.txt` file specifies minimum tested versions that are confirmed to work with this codebase. You can safely use newer versions of these packages.
 
 ### Download Omniglot Dataset
 
@@ -361,15 +366,28 @@ That's it! The MAML algorithm and evaluation code work with any dataset followin
 
 ## 📝 Requirements
 
+### Python Version
 ```
 python >= 3.8
-torch >= 1.12.0
-torchvision >= 0.13.0
-numpy >= 1.21.0
-matplotlib >= 3.5.0
-pillow >= 9.0.0
-tqdm >= 4.64.0
 ```
+
+### Package Dependencies
+The following packages are required (minimum tested versions):
+
+```
+torch >= 2.6.0
+numpy >= 2.2.6
+matplotlib >= 3.10.0
+tqdm >= 4.67.1
+Pillow >= 11.1.0
+```
+
+**Installation:**
+```bash
+pip install -r requirements.txt
+```
+
+> 💡 **Tip:** The versions specified in `requirements.txt` are minimum versions that have been tested and confirmed to work. Feel free to use newer versions of these packages.
 
 ## 🤝 Contributing
 

@@ -1,0 +1,18 @@
+# Requirements for meta-learning-from-scratch
+# Generated on October 10, 2025
+# Minimum versions tested and confirmed to work
+
+# Deep Learning Framework
+torch>=2.6.0
+
+# Numerical Computing
+numpy>=2.2.6
+
+# Data Visualization
+matplotlib>=3.10.0
+
+# Progress Bars
+tqdm>=4.67.1
+
+# Image Processing
+Pillow>=11.1.0
