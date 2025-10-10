@@ -6,16 +6,37 @@ from contextlib import contextmanager
 
 class MetaDropout(nn.Module):
     """Dropout layer that maintains consistent masks across inner loop.
-    
+
     For Meta Dropout in MAML:
     - Call reset_mask() at the start of each new task
     - Same mask is reused throughout the task's inner loop adaptation
     - Falls back to standard dropout if mask not initialized
-    
+
+    **Dropout Disabling Approaches:**
+
+    1. **Model-level control (Recommended):**
+       Check `_outer_loop_mode` in your model's forward pass to skip dropout layers.
+       Used in SimpleConvNet: `if not self._outer_loop_mode: x = self.dropout1(x)`
+
+    2. **Layer-level control (Alternative):**
+       Use `eval_mode()` and `train_mode()` methods for models where you can't
+       easily modify the forward pass logic.
+       ```python
+       model.disable_dropout()  # Calls eval_mode() on all MetaDropout layers
+       outputs = model(query_data)
+       model.enable_dropout()   # Calls train_mode() on all MetaDropout layers
+       ```
+
+    3. **Standard PyTorch:**
+       Calling `model.eval()` automatically disables all MetaDropout layers
+       via the `not self.training` check.
+       Note that this also affects BatchNorm and other layers. And is extremely slow /
+       done frequently like changing between inner and outer loop.
+
     The mask is batch-size agnostic (shape: [1, C, H, W]) and broadcasts
     across different batch sizes, making it efficient for MAML where
     support set and query set have different batch sizes.
-    
+
     Args:
         p: Dropout probability (default: 0.5)
         inplace: If True, modifies input in-place (default: False)

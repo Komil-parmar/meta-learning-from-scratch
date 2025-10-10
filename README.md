@@ -72,23 +72,26 @@ A metric-based meta-learning approach that generates task-specific embeddings fo
 
 ```
 meta-learning-from-scratch/
-├── MAML.py                      # Core MAML & FOMAML algorithm implementation
-├── EB_Meta_Network.py           # Embedding-based Meta Networks implementation
-├── SimpleConvNet.py             # CNN model with Meta Dropout support
-├── Meta_Dropout.py              # Meta Dropout layer implementation
-├── evaluate_maml.py             # MAML-specific evaluation functions
-├── test_meta_dropout.py         # Meta Dropout test suite
-├── test_meta_network_dropout.py # Meta Networks with Meta Dropout tests
-├── utils/
+├── algorithms/                  # Core algorithm implementations
+│   ├── maml.py                  # MAML & FOMAML implementation
+│   ├── eb_meta_network.py       # Embedding-based Meta Networks
+│   ├── cnn_maml.py              # CNN model with Meta Dropout support
+│   └── meta_dropout.py          # Meta Dropout layer implementation
+├── evaluation/                  # Evaluation and visualization tools
+│   ├── evaluate_maml.py         # MAML-specific evaluation functions
+│   └── eval_visualization.py    # Plotting and analysis utilities
+├── tests/                       # Test suites
+│   ├── test_meta_dropout.py     # Meta Dropout functionality tests
+│   └── test_meta_network_dropout.py # Meta Networks integration tests
+├── utils/                       # Dataset utilities
 │   ├── load_omniglot.py         # Dataset loaders (easily adaptable)
-│   ├── evaluate.py              # Algorithm-agnostic evaluation utilities
 │   └── visualize_omniglot.py    # Dataset visualization tools
-├── docs/
+├── docs/                        # Documentation
 │   ├── MAML_vs_FOMAML.md        # MAML and FOMAML comparison
 │   ├── META_DROPOUT_USAGE.md    # Meta Dropout usage guide
 │   ├── META_NETWORKS_OVERVIEW.md        # Meta Networks architecture guide
 │   └── META_DROPOUT_IN_META_NETWORKS.md # Meta Dropout integration details
-├── examples/
+├── examples/                    # Tutorial notebooks and scripts
 │   ├── maml_on_omniglot.ipynb   # Complete MAML tutorial notebook
 │   ├── embedding_based_meta_network.ipynb # Meta Networks tutorial
 │   └── compare_maml_fomaml.py   # MAML vs FOMAML comparison script
@@ -126,10 +129,10 @@ unzip images_evaluation.zip -d omniglot/
 
 ```python
 import torch
-from MAML import train_maml, ModelAgnosticMetaLearning
-from SimpleConvNet import SimpleConvNet
+from algorithms.maml import train_maml, ModelAgnosticMetaLearning
+from algorithms.cnn_maml import SimpleConvNet
 from utils.load_omniglot import OmniglotDataset, OmniglotTaskDataset
-from utils.evaluate import plot_evaluation_results, plot_training_progress
+from evaluation.eval_visualization import plot_evaluation_results, plot_training_progress
 from torch.utils.data import DataLoader
 
 # 1. Load your dataset
@@ -137,29 +140,29 @@ dataset = OmniglotDataset("omniglot/images_background")
 
 # 2. Create task dataset (5-way 1-shot)
 task_dataset = OmniglotTaskDataset(
-    dataset, 
-    n_way=5, 
-    k_shot=1, 
-    k_query=15, 
-    num_tasks=2000
+	dataset,
+	n_way=5,
+	k_shot=1,
+	k_query=15,
+	num_tasks=2000
 )
 
 task_dataloader = DataLoader(task_dataset, batch_size=4, shuffle=True)
 
 # 3. Define your model (with optional Meta Dropout)
 model = SimpleConvNet(
-    num_classes=5,
-    dropout_rates=[0.05, 0.10, 0.15, 0.05]  # Validated configuration
+	num_classes=5,
+	dropout_rates=[0.05, 0.10, 0.15, 0.05]  # Validated configuration
 )
 
 # 4. Train with MAML or FOMAML
 model, maml, losses = train_maml(
-    model=model,
-    task_dataloader=task_dataloader,
-    inner_lr=0.01,          # Task adaptation learning rate
-    outer_lr=0.001,         # Meta-learning rate
-    inner_steps=5,          # Adaptation steps per task
-    first_order=False       # Set True for FOMAML
+	model=model,
+	task_dataloader=task_dataloader,
+	inner_lr=0.01,  # Task adaptation learning rate
+	outer_lr=0.001,  # Meta-learning rate
+	inner_steps=5,  # Adaptation steps per task
+	first_order=False  # Set True for FOMAML
 )
 
 # 5. Evaluate on test tasks
@@ -170,17 +173,17 @@ plot_evaluation_results(eval_results)
 #### Training Embedding-based Meta Networks
 
 ```python
-from EB_Meta_Network import MetaNetwork
-from utils.evaluate import evaluate_model
+from algorithms.eb_meta_network import MetaNetwork
+from evaluation.eval_visualization import evaluate_model
 
 # 1. Setup dataset (same as above)
 # 2. Define Meta Network with Meta Dropout
 meta_model = MetaNetwork(
-    embedding_dim=64,
-    hidden_dim=128,
-    num_classes=5,
-    dropout_rates=[0.05, 0.10, 0.15],  # Meta Dropout rates
-    dropout_query=True  # Apply dropout to query embeddings
+	embedding_dim=64,
+	hidden_dim=128,
+	num_classes=5,
+	dropout_rates=[0.05, 0.10, 0.15],  # Meta Dropout rates
+	dropout_query=True  # Apply dropout to query embeddings
 )
 
 # 3. Train Meta Network (standard PyTorch training loop)
@@ -188,17 +191,17 @@ optimizer = torch.optim.Adam(meta_model.parameters(), lr=0.001)
 criterion = torch.nn.CrossEntropyLoss()
 
 for epoch in range(100):
-    for batch in task_dataloader:
-        support_data, support_labels, query_data, query_labels = batch
-        
-        # Forward pass
-        logits = meta_model(support_data, support_labels, query_data)
-        loss = criterion(logits, query_labels)
-        
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+	for batch in task_dataloader:
+		support_data, support_labels, query_data, query_labels = batch
+
+		# Forward pass
+		logits = meta_model(support_data, support_labels, query_data)
+		loss = criterion(logits, query_labels)
+
+		# Backward pass
+		optimizer.zero_grad()
+		loss.backward()
+		optimizer.step()
 
 # 4. Evaluate (single forward pass, no adaptation needed)
 accuracy = evaluate_model(meta_model, test_dataloader)
@@ -263,12 +266,12 @@ accuracy = evaluate_model(meta_model, test_dataloader)
 
 ## 📊 Expected Results (5-way 1-shot on Omniglot)
 
-| Metric | Value |
-|--------|-------|
-| Before Adaptation | 20-30% |
-| After Adaptation | 60-90% |
-| Improvement | 40-60% |
-| Training Time (GPU) | 10-30 min |
+| Metric | Value       |
+|--------|-------------|
+| Before Adaptation | 20-30%      |
+| After Adaptation | 75-80%      |
+| Improvement | 45-60%      |
+| Training Time (GPU) | 3-10 min |
 
 ## 🔧 Adapting to Your Dataset
 

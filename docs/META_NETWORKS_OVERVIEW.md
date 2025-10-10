@@ -100,7 +100,7 @@ For each batch of tasks:
 ### Training:
 
 ```python
-from EB_Meta_Network import MetaNetwork, train_meta_network
+from algorithms.eb_meta_network import MetaNetwork, train_meta_network
 from utils.load_omniglot import OmniglotDataset, OmniglotTaskDataset
 from torch.utils.data import DataLoader
 
@@ -112,23 +112,23 @@ dataloader = DataLoader(task_dataset, batch_size=4, shuffle=True)
 # Create and train model
 model = MetaNetwork(embedding_dim=64, hidden_dim=128, num_classes=5)
 model, optimizer, losses = train_meta_network(
-    model=model,
-    task_dataloader=dataloader,
-    learning_rate=0.001
+	model=model,
+	task_dataloader=dataloader,
+	learning_rate=0.001
 )
 ```
 
 ### Evaluation:
 
 ```python
-from EB_Meta_Network import evaluate_meta_network
-from utils.evaluate import plot_evaluation_results
+from algorithms.eb_meta_network import evaluate_meta_network
+from evaluation.eval_visualization import plot_evaluation_results
 
 # Evaluate on test tasks
 eval_results = evaluate_meta_network(
-    model=model,
-    eval_dataloader=test_dataloader,
-    num_classes=5
+	model=model,
+	eval_dataloader=test_dataloader,
+	num_classes=5
 )
 
 # Visualize results

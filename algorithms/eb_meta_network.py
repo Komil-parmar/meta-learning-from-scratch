@@ -30,7 +30,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
-from Meta_Dropout import MetaDropout
+from algorithms.meta_dropout import MetaDropout
 
 
 class EmbeddingNetwork(nn.Module):
@@ -86,6 +86,8 @@ class EmbeddingNetwork(nn.Module):
         
         # Track if masks need reset
         self._masks_initialized = False
+
+        self.force_eval = False  # If True, remove dropout even in train mode
 
     def reset_dropout_masks(self, input_shape: torch.Size, device: torch.device):
         """

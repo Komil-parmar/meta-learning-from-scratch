@@ -589,11 +589,12 @@ class ModelAgnosticMetaLearning:
                 # Outer loop evaluation WITHOUT dropout using context manager
                 # This is Meta Dropout Option 2: dropout only in inner loop
                 # ⚡ ULTRA-OPTIMIZED: Context manager just sets a boolean flag (zero overhead!)
-                if hasattr(self.model, 'outer_loop_mode'):
+                if self.model.use_meta_dropout:
                     # Use context manager - automatic cleanup, exception-safe
-                    with self.model.outer_loop_mode():
-                        query_logits = self.forward_with_weights(query_data, fast_weights)
-                        query_loss = F.cross_entropy(query_logits, query_labels)
+                    self.model._outer_loop_mode = True
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
+                    self.model._outer_loop_mode = False
                 else:
                     # No Meta Dropout available - use full network
                     query_logits = self.forward_with_weights(query_data, fast_weights)

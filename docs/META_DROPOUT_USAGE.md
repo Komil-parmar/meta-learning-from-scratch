@@ -31,13 +31,13 @@ This implementation provides **Meta Dropout** for MAML (Model-Agnostic Meta-Lear
 
 ```python
 import torch
-from SimpleConvNet import SimpleConvNet
+from algorithms.cnn_maml import SimpleConvNet
 
 # Create model with Meta Dropout using context manager
 model = SimpleConvNet(
-    num_classes=5,
-    dropout_config=[0.0, 0.1, 0.15, 0.0],  # Skip first/last layers
-    use_meta_dropout=True
+	num_classes=5,
+	dropout_config=[0.0, 0.1, 0.15, 0.0],  # Skip first/last layers
+	use_meta_dropout=True
 ).to(device)
 
 # The model has an _outer_loop_mode flag for ultra-fast dropout control
@@ -49,15 +49,15 @@ print(f"Model has outer_loop_mode: {hasattr(model, 'outer_loop_mode')}")
 The MAML implementation automatically uses the context manager:
 
 ```python
-from MAML import ModelAgnosticMetaLearning, train_maml
+from algorithms.maml import ModelAgnosticMetaLearning, train_maml
 
 # Train with MAML - Meta Dropout context manager is automatic!
 trained_model, maml, losses = train_maml(
-    model=model,
-    task_dataloader=task_dataloader,
-    inner_lr=0.01,
-    outer_lr=0.001,
-    inner_steps=5
+	model=model,
+	task_dataloader=task_dataloader,
+	inner_lr=0.01,
+	outer_lr=0.001,
+	inner_steps=5
 )
 ```
 

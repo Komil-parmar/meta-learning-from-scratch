@@ -8,8 +8,7 @@ This script verifies that:
 """
 
 import torch
-import torch.nn as nn
-from EB_Meta_Network import MetaNetwork
+from algorithms.eb_meta_network import MetaNetwork
 
 def test_meta_dropout_consistency():
     """Test that support and query share the same dropout masks."""

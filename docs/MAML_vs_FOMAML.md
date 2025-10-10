@@ -115,30 +115,32 @@ grads = torch.autograd.grad(query_loss, fast_weights.values())
 ## 🎓 Example Usage
 
 ### Training with MAML
+
 ```python
-from MAML import train_maml
+from algorithms.maml import train_maml
 
 model, maml, losses = train_maml(
-    model=model,
-    task_dataloader=train_loader,
-    inner_lr=0.01,
-    outer_lr=0.001,
-    inner_steps=5,
-    first_order=False  # Use full MAML
+	model=model,
+	task_dataloader=train_loader,
+	inner_lr=0.01,
+	outer_lr=0.001,
+	inner_steps=5,
+	first_order=False  # Use full MAML
 )
 ```
 
 ### Training with FOMAML
+
 ```python
-from MAML import train_maml
+from algorithms.maml import train_maml
 
 model, fomaml, losses = train_maml(
-    model=model,
-    task_dataloader=train_loader,
-    inner_lr=0.01,
-    outer_lr=0.001,
-    inner_steps=5,
-    first_order=True  # Use FOMAML
+	model=model,
+	task_dataloader=train_loader,
+	inner_lr=0.01,
+	outer_lr=0.001,
+	inner_steps=5,
+	first_order=True  # Use FOMAML
 )
 ```
 
@@ -443,13 +445,13 @@ A: Use MAML when:
 
 ```python
 # Just flip one boolean to switch!
-from MAML import train_maml
+from algorithms.maml import train_maml
 
 # Fast training with FOMAML
 model, fomaml, losses = train_maml(
-    model=model,
-    task_dataloader=train_loader,
-    first_order=True  # ← That's it!
+	model=model,
+	task_dataloader=train_loader,
+	first_order=True  # ← That's it!
 )
 ```
 

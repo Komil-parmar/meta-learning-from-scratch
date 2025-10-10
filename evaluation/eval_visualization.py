@@ -261,7 +261,7 @@ def plot_training_progress(
         
     See Also:
         - plot_evaluation_results: Visualize evaluation metrics
-        - train_maml: MAML training function (in MAML.py)
+        - train_maml: MAML training function (in maml.py)
     """
     fig, axes = plt.subplots(1, 2, figsize=figsize)
     

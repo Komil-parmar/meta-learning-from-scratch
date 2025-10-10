@@ -12,9 +12,9 @@ import time
 import sys
 sys.path.append('.')
 
-from MAML import train_maml, ModelAgnosticMetaLearning
+from algorithms.maml import train_maml
 from utils.load_omniglot import OmniglotDataset, OmniglotTaskDataset
-from evaluate_maml import evaluate_maml
+from evaluation.evaluate_maml import evaluate_maml
 
 class SimpleConvNet(nn.Module):
     """Simple CNN for Omniglot classification"""

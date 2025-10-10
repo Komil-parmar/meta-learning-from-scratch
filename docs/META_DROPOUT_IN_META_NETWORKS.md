@@ -223,34 +223,34 @@ Based on experimental results with Meta Dropout:
 ### Training with Meta Dropout
 
 ```python
-from EB_Meta_Network import MetaNetwork, train_meta_network
+from algorithms.eb_meta_network import MetaNetwork, train_meta_network
 
 # Create model with Meta Dropout (default rates: [0.05, 0.10, 0.15])
 model = MetaNetwork(
-    embedding_dim=64, 
-    hidden_dim=128, 
-    num_classes=5,
-    dropout_rates=[0.05, 0.10, 0.15]  # Validated configuration
+	embedding_dim=64,
+	hidden_dim=128,
+	num_classes=5,
+	dropout_rates=[0.05, 0.10, 0.15]  # Validated configuration
 )
 
 # Train (Meta Dropout handled automatically)
 model, optimizer, losses = train_meta_network(
-    model=model,
-    task_dataloader=train_dataloader,
-    learning_rate=0.001
+	model=model,
+	task_dataloader=train_dataloader,
+	learning_rate=0.001
 )
 ```
 
 ### Evaluation
 
 ```python
-from EB_Meta_Network import evaluate_meta_network
+from algorithms.eb_meta_network import evaluate_meta_network
 
 # Evaluate (dropout automatically disabled in eval mode)
 eval_results = evaluate_meta_network(
-    model=model,
-    eval_dataloader=test_dataloader,
-    num_classes=5
+	model=model,
+	eval_dataloader=test_dataloader,
+	num_classes=5
 )
 ```
 
