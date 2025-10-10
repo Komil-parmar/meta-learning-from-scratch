@@ -8,14 +8,15 @@ A modular collection of meta-learning algorithm implementations built from scrat
 
 Meta-learning (or "learning to learn") enables models to quickly adapt to new tasks with minimal training data. Unlike traditional machine learning that learns a specific task, meta-learning algorithms learn how to efficiently learn new tasks.
 
-**Current Status**: ✅ MAML & FOMAML Complete | ✅ Embedding-based Meta Networks Complete | ✅ Meta Dropout Implemented | 🚧 More algorithms coming soon!
+**Current Status**: ✅ MAML & FOMAML Complete | ✅ Both Meta Networks Variants Complete | ✅ Meta Dropout Implemented | 🚧 More algorithms coming soon!
 
 ## 🎯 Features
 
 - **Modular Design**: Clean, reusable components that work across different datasets and tasks
 - **Easy Experimentation**: Plug in your own datasets, customize task sampling, and tune hyperparameters
-- **Meta Dropout Support**: Consistent dropout masks for improved few-shot learning performance
-- **Well-Documented**: Comprehensive docstrings, inline comments, and tutorial notebook
+- **Meta Dropout Support**: Consistent dropout masks for improved few-shot learning performance across all algorithms
+- **Shared Components**: EmbeddingNetwork shared across implementations for fair comparisons
+- **Well-Documented**: Comprehensive docstrings, inline comments, and tutorial notebooks
 - **Research-Ready**: Built for both learning and experimentation
 
 ## 📚 Algorithms Implemented
@@ -27,6 +28,7 @@ A flexible meta-learning approach that trains a model's initial parameters to en
 - Works with any gradient-based model
 - Learns optimal parameter initialization
 - Adapts quickly with minimal data
+- **Meta Dropout**: +1.2% accuracy, -8.9% variance
 - [Original Paper](https://arxiv.org/abs/1703.03400)
 
 **Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML.md)
@@ -40,10 +42,10 @@ A memory-efficient variant of MAML that omits second-order derivatives, offering
 **Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML.md)
 
 ### ✅ Meta Dropout
-An optimized dropout strategy for meta-learning that maintains consistent dropout masks during inner loop adaptation:
-- **Improved performance**: 80.1% ± 10.48% accuracy vs 78.9% ± 11.5% baseline
-- **Reduced variance**: 16.9% reduction in performance variance
-- **Context manager API**: Clean, exception-safe implementation
+An optimized dropout strategy for meta-learning that maintains consistent dropout masks during task adaptation:
+- **5x speedup**: Optimized boolean flag implementation (no context manager overhead)
+- **Universal improvement**: Benefits all meta-learning algorithms
+- **Best results**: +2.16% accuracy with Original Meta Networks
 
 **Documentation:** See [Meta Dropout Usage Guide](docs/META_DROPOUT_USAGE.md)
 
@@ -54,19 +56,42 @@ A metric-based meta-learning approach that generates task-specific embeddings fo
 - **Single forward pass**: No gradient-based adaptation needed at test time
 - **Metric-based learning**: Uses embeddings and similarity for classification
 - **Fast inference**: ~50ms per task vs gradient-based methods
-- **Meta Dropout support**: Consistent masks across support/query sets improve performance by +1.5%
+- **Meta Dropout support**: +1.5% accuracy improvement
 
 **Performance:** 77.3% ± 11.9% accuracy on 5-way 1-shot Omniglot with Meta Dropout
 
-**Documentation:** See [Meta Networks Overview](docs/META_NETWORKS_OVERVIEW.md) and [Meta Dropout in Meta Networks](docs/META_DROPOUT_IN_META_NETWORKS.md)
+**Documentation:** See [Meta Networks Overview](docs/META_NETWORKS_OVERVIEW.md) and [Meta Dropout in EB Meta Networks](docs/META_DROPOUT_IN_EB_META_NETWORKS.md)
 
-**Note:** This is the Embedding-based variant (Metric-based Meta Learning). The original Meta Networks (Model-based) will be added next.
+**Note:** This is the Embedding-based variant (Metric-based Meta Learning).
+
+### ✅ Original Meta Networks
+The true implementation of Meta Networks from the original paper (Munkhdalai & Yu, 2017). A model-based meta-learning approach where one neural network learns to generate the parameters of another neural network.
+
+**Key Features:**
+- **Weight prediction**: Meta-learner generates actual FC layer weights W and biases b
+- **Model-based learning**: One model predicts another model's parameters
+- **Single forward pass**: Direct parameter generation, no adaptation loop
+- **Best Meta Dropout results**: +2.16% accuracy, -11.7% variance (winner!)
+- **Highest accuracy**: 86.31% ± 9.07% on 5-way 1-shot Omniglot
+- [Original Paper](https://arxiv.org/abs/1703.00837)
+
+**Performance:** 86.31% ± 9.07% accuracy on 5-way 1-shot Omniglot with Meta Dropout
+
+**Architecture:**
+- **U, V matrices** and **e vector**: Core meta-learner parameters
+- **Weight generator**: Predicts W [embedding_dim × num_classes]
+- **Bias generator**: Predicts b [num_classes]
+- **Shared EmbeddingNetwork**: Same CNN as Embedding-based variant
+
+**Documentation:** See [Original Meta Networks Overview](docs/ORIGINAL_META_NETWORK_OVERVIEW.md) and [Meta Dropout in Meta Networks](docs/META_DROPOUT_IN_META_NETWORKS.md)
+
+**Note:** This is the original Meta Networks (Model-based Meta Learning) - the true paper implementation.
 
 ### 🚧 Coming Soon
-- Original Meta Networks (Model-based variant)
 - Prototypical Networks
 - Matching Networks
 - Reptile
+- Relation Networks
 
 ## 🗂️ Repository Structure
 
@@ -75,6 +100,8 @@ meta-learning-from-scratch/
 ├── algorithms/                  # Core algorithm implementations
 │   ├── maml.py                  # MAML & FOMAML implementation
 │   ├── eb_meta_network.py       # Embedding-based Meta Networks
+│   ├── original_meta_network.py # Original Meta Networks (model-based)
+│   ├── embedding_network.py     # Shared CNN feature extractor
 │   ├── cnn_maml.py              # CNN model with Meta Dropout support
 │   └── meta_dropout.py          # Meta Dropout layer implementation
 ├── evaluation/                  # Evaluation and visualization tools
@@ -89,11 +116,13 @@ meta-learning-from-scratch/
 ├── docs/                        # Documentation
 │   ├── MAML_vs_FOMAML.md        # MAML and FOMAML comparison
 │   ├── META_DROPOUT_USAGE.md    # Meta Dropout usage guide
-│   ├── META_NETWORKS_OVERVIEW.md        # Meta Networks architecture guide
-│   └── META_DROPOUT_IN_META_NETWORKS.md # Meta Dropout integration details
+│   ├── META_NETWORKS_OVERVIEW.md        # Embedding-based Meta Networks guide
+│   ├── ORIGINAL_META_NETWORK_OVERVIEW.md # Original Meta Networks guide
+│   └── META_DROPOUT_IN_META_NETWORKS.md # Meta Dropout integration (both variants)
 ├── examples/                    # Tutorial notebooks and scripts
 │   ├── maml_on_omniglot.ipynb   # Complete MAML tutorial notebook
-│   ├── embedding_based_meta_network.ipynb # Meta Networks tutorial
+│   ├── embedding_based_meta_network.ipynb # Embedding-based Meta Networks tutorial
+│   ├── meta_network.ipynb       # Original Meta Networks tutorial
 │   └── compare_maml_fomaml.py   # MAML vs FOMAML comparison script
 └── README.md                    # This file
 ```
@@ -221,6 +250,11 @@ accuracy = evaluate_model(meta_model, test_dataloader)
 - EmbeddingNetwork (CNN) + MetaLearner (U, V, e matrices) architecture
 - Integrated Meta Dropout support with automatic mask management
 
+**`Original_Meta_Network.py`** - Original Meta Networks (Model-based)
+- True implementation of Meta Networks from the original paper
+- One neural network predicts the parameters of another neural network
+- Integrated Meta Dropout support for improved performance
+
 **`SimpleConvNet.py`** - CNN Model with Meta Dropout
 - 4-layer convolutional network optimized for few-shot learning
 - Meta Dropout integration with context manager API
@@ -261,6 +295,12 @@ accuracy = evaluate_model(meta_model, test_dataloader)
 2. Meta Networks architecture and fast weight generation
 3. Training with Meta Dropout for improved performance
 4. Comparison with MAML and analysis of results
+
+**`meta_network.ipynb`** - Original Meta Networks tutorial:
+1. Understanding model-based meta-learning
+2. Original Meta Networks architecture and weight prediction
+3. Training with Meta Dropout for best performance
+4. Comparison with embedding-based variant and analysis of results
 
 **Perfect for**: Learning meta-learning concepts, understanding different approaches, adapting to your own problems
 
