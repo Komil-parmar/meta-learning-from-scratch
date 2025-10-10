@@ -93,6 +93,24 @@ The true implementation of Meta Networks from the original paper (Munkhdalai & Y
 - Reptile
 - Relation Networks
 
+## 📊 Algorithm Comparison: MAML vs FOMAML vs Meta Networks
+
+
+| Algorithm | Speed ⏱️ (Training/Inference) | Accuracy 🎯 (5-way 1-shot Omniglot) | Memory Usage 💾 |
+|-----------|----------------------------|----------------------------------|--------------|
+| **MAML** | Slow (second-order grads) / Moderate | 80.1% ± 10.48% | High |
+| **FOMAML** | ~40% Faster than MAML / Moderate | ~78–80% | Moderate (no 2nd-order) |
+| **Meta Networks (EB)** | Fast (single forward, no adaptation) | 77.3% ± 11.9% | Low |
+| **Meta Networks (Original)** | Fast (single forward pass) | 86.31% ± 9.07% | Moderate |
+
+> **Legend:**
+> - EB: Embedding-based Meta Networks (Metric-based)
+> - Original: Original Meta Networks (Model-based)
+> - Accuracy: Reported with Meta Dropout where applicable
+> - Speed: Relative, based on implementation details
+> - Memory: Relative to each other
+
+
 ## 🗂️ Repository Structure
 
 ```
