@@ -5,11 +5,27 @@ import matplotlib.pyplot as plt
 
 def visualize_task_sample(task_dataset, task_idx=0):
     """
-    Visualize a sample task from the dataset showing support and query sets.
+    Visualize a sample N-way K-shot task from the dataset.
+    
+    Creates a visualization showing both the support set (used for adaptation)
+    and query set (used for evaluation) for a single few-shot learning task.
+    The visualization displays one example per class from both sets in a grid
+    layout with support images in the top row and query images in the bottom row.
     
     Args:
-        task_dataset: OmniglotTaskDataset instance
-        task_idx: Index of the task to visualize
+        task_dataset (OmniglotTaskDataset): An instance of OmniglotTaskDataset
+            that generates few-shot learning tasks.
+        task_idx (int, optional): Index of the task to visualize. Note that tasks
+            are randomly generated, so different runs may show different characters
+            even with the same index. Defaults to 0.
+    
+    Returns:
+        None: Displays a matplotlib figure with the task visualization and prints
+            task statistics to the console.
+    
+    Example:
+        >>> task_dataset = OmniglotTaskDataset(omniglot_data, n_way=5, k_shot=1)
+        >>> visualize_task_sample(task_dataset, task_idx=0)
     """
     # Get a sample task
     support_data, support_labels, query_data, query_labels = task_dataset[task_idx]
@@ -67,12 +83,35 @@ def visualize_task_sample(task_dataset, task_idx=0):
 
 def visualize_character_variations(dataset, num_chars=3, max_examples=10):
     """
-    Visualize multiple examples from the same character class to show variation.
+    Visualize multiple handwritten examples of the same character classes.
+    
+    Creates a grid visualization showing different handwritten variations of
+    randomly sampled character classes from the Omniglot dataset. This helps
+    understand the intra-class variation that makes few-shot learning challenging.
+    Each row shows different examples of the same character written by different
+    people, demonstrating the variety in handwriting styles.
     
     Args:
-        dataset: OmniglotDataset instance
-        num_chars: Number of different characters to show
-        max_examples: Maximum number of examples to show per character
+        dataset (OmniglotDataset): An instance of OmniglotDataset containing
+            the character images to visualize.
+        num_chars (int, optional): Number of different character classes to display.
+            Each character will be shown in a separate row. Defaults to 3.
+        max_examples (int, optional): Maximum number of handwriting examples to show
+            per character class. The actual number shown may be less if fewer
+            examples are available. Defaults to 10.
+    
+    Returns:
+        None: Displays a matplotlib figure showing the character variations and
+            prints explanatory information to the console.
+    
+    Example:
+        >>> omniglot_data = OmniglotDataset('data/omniglot')
+        >>> visualize_character_variations(omniglot_data, num_chars=5, max_examples=15)
+    
+    Notes:
+        - Each character in Omniglot typically has ~20 different handwritten examples
+        - Characters are randomly sampled, so each call may show different characters
+        - Empty cells appear if a character has fewer examples than max_examples
     """
     fig, axes = plt.subplots(num_chars, max_examples, figsize=(15, 5))
     
