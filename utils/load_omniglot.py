@@ -5,6 +5,8 @@ from PIL import Image
 import os
 import random
 from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 
 class OmniglotDataset(Dataset):
@@ -86,6 +88,34 @@ class OmniglotDataset(Dataset):
         return torch.stack(image_tensors), idx
 
 
+def _load_character_data(char_path):
+    """
+    Helper function to load all images for a single character.
+    Used by multiprocessing to parallelize data loading.
+    
+    Args:
+        char_path (str): Path to character directory
+        
+    Returns:
+        tuple: (character_tensor, char_path) or None if no images found
+    """
+    image_files = sorted([f for f in os.listdir(char_path) if f.endswith('.png')])
+    image_tensors = []
+    
+    for img_name in image_files:
+        img_path = os.path.join(char_path, img_name)
+        img = Image.open(img_path).convert('L')
+        img = img.resize((105, 105))
+        img_tensor = torch.tensor(np.array(img), dtype=torch.float32) / 255.0
+        img_tensor = img_tensor.unsqueeze(0)  # Add channel dimension
+        image_tensors.append(img_tensor)
+    
+    # Stack all images for this character
+    if image_tensors:
+        return torch.stack(image_tensors), char_path
+    return None
+
+
 class PrefetchedOmniglotDataset(Dataset):
     """
     Prefetched Omniglot Dataset - loads entire dataset into RAM for faster access.
@@ -94,63 +124,62 @@ class PrefetchedOmniglotDataset(Dataset):
     significantly speeding up data access during training. Ideal for Omniglot
     since the entire dataset is relatively small (~1.5GB uncompressed).
     
+    Uses multiprocessing to parallelize image loading across CPU cores.
+    
     Args:
         data_path (str): Path to Omniglot data directory
         transform (callable, optional): Optional transform to be applied
+        num_workers (int, optional): Number of parallel workers. Defaults to CPU count.
         
     Memory usage: Approximately 200-300 MB for background set, 100-150 MB for evaluation set
     """
-    def __init__(self, data_path, transform=None):
+    def __init__(self, data_path, transform=None, num_workers=None):
         self.data_path = data_path
         self.transform = transform
         self.character_data = []  # List of tensors, one per character class
         self.character_paths = []
         
-        print("🚀 Prefetching Omniglot dataset into RAM...")
-        print("   This may take 20-30 seconds but will speed up training significantly!")
+        # Determine number of workers
+        if num_workers is None:
+            num_workers = cpu_count()
+        
+        print("🚀 Prefetching Omniglot dataset into RAM with multiprocessing...")
+        print(f"   Using {num_workers} worker processes")
+        print("   This should take 5-15 seconds with parallel loading!")
         
         # Get all character folders
         alphabets = sorted(os.listdir(data_path))
-        total_chars = 0
+        all_char_paths = []
         
-        # Count total characters for progress bar
+        # Collect all character paths
         for alphabet in alphabets:
             alphabet_path = os.path.join(data_path, alphabet)
-            if os.path.isdir(alphabet_path):
-                characters = os.listdir(alphabet_path)
-                total_chars += len([c for c in characters if os.path.isdir(os.path.join(alphabet_path, c))])
+            if not os.path.isdir(alphabet_path):
+                continue
+                
+            characters = sorted(os.listdir(alphabet_path))
+            for char in characters:
+                char_path = os.path.join(alphabet_path, char)
+                if os.path.isdir(char_path):
+                    all_char_paths.append(char_path)
         
-        # Load all character data into memory
-        with tqdm(total=total_chars, desc="Loading characters into RAM") as pbar:
-            for alphabet in alphabets:
-                alphabet_path = os.path.join(data_path, alphabet)
-                if not os.path.isdir(alphabet_path):
-                    continue
-                    
-                characters = sorted(os.listdir(alphabet_path))
-                for char in characters:
-                    char_path = os.path.join(alphabet_path, char)
-                    if not os.path.isdir(char_path):
-                        continue
-                    
-                    # Load all images for this character
-                    image_files = sorted([f for f in os.listdir(char_path) if f.endswith('.png')])
-                    image_tensors = []
-                    
-                    for img_name in image_files:
-                        img_path = os.path.join(char_path, img_name)
-                        img = Image.open(img_path).convert('L')
-                        img = img.resize((105, 105))
-                        img_tensor = torch.tensor(np.array(img), dtype=torch.float32) / 255.0
-                        img_tensor = img_tensor.unsqueeze(0)  # Add channel dimension
-                        image_tensors.append(img_tensor)
-                    
-                    # Stack all images for this character
-                    if image_tensors:
-                        self.character_data.append(torch.stack(image_tensors))
-                        self.character_paths.append(char_path)
-                    
-                    pbar.update(1)
+        total_chars = len(all_char_paths)
+        print(f"   Found {total_chars} character classes to load")
+        
+        # Load all character data using multiprocessing
+        with Pool(processes=num_workers) as pool:
+            results = list(tqdm(
+                pool.imap(_load_character_data, all_char_paths),
+                total=total_chars,
+                desc="Loading characters into RAM"
+            ))
+        
+        # Filter out None results and separate data from paths
+        for result in results:
+            if result is not None:
+                char_tensor, char_path = result
+                self.character_data.append(char_tensor)
+                self.character_paths.append(char_path)
         
         # Calculate memory usage
         total_memory = sum(char_data.element_size() * char_data.nelement() 

@@ -105,6 +105,8 @@ class ANIL:
         inner_steps: int = 5,
         freeze_body: bool = False,
         trainable_body_modules: Optional[list] = None,
+        body_lr_multipliers: Optional[Dict[str, float]] = None,
+        warmup_steps: int = 0,
         optimizer_cls: Type[optim.Optimizer] = optim.Adam,
         optimizer_kwargs: Optional[Dict] = None,
         first_order: bool = False
@@ -123,6 +125,14 @@ class ANIL:
                 - True: Frozen pretrained body (never updated)
             trainable_body_modules (list): List of specific submodules to keep trainable
                 even when freeze_body=True (e.g., adapter networks). Default: None
+            body_lr_multipliers (dict): Layer-specific LR multipliers for body (default: None)
+                Format: {'layer_name': multiplier, ...}
+                Example: {'0': 0.01, '5': 0.05, 'default': 1.0}
+                The layer name should match part of the parameter name from
+                body.named_parameters(). 'default' is used as fallback.
+                Only applies when freeze_body=False.
+            warmup_steps (int): Steps to train only head before updating body (default: 0)
+                Only applies when freeze_body=False.
             optimizer_cls (type): Optimizer class for meta-learning (default: Adam)
             optimizer_kwargs (dict): Additional optimizer arguments (default: None)
             first_order (bool): Use first-order approximation (default: False)
@@ -135,6 +145,9 @@ class ANIL:
         self.freeze_body = freeze_body
         self.first_order = first_order
         self.trainable_body_modules = trainable_body_modules or []
+        self.warmup_steps = warmup_steps
+        self.current_step = 0
+        self._body_frozen = False  # Track body freeze state to avoid redundant operations
         
         # Configure which parameters to optimize
         if freeze_body:
@@ -171,6 +184,9 @@ class ANIL:
             trainable_module_params_set = set(id(p) for p in trainable_module_params)
             bn_params = [p for p in bn_params if id(p) not in trainable_module_params_set]
 
+            # OPTIMIZATION: Cache trainable body params for first-order optimization
+            self._trainable_body_params = bn_params + trainable_module_params
+
             # Optimize head + BatchNorm + trainable modules
             params_to_optimize = list(self.head.parameters()) + bn_params + trainable_module_params
 
@@ -188,13 +204,67 @@ class ANIL:
             print(f"  Total trainable: {head_params + bn_param_count + trainable_module_count:,}")
         else:
             # Optimize both body and head
-            params_to_optimize = list(self.body.parameters()) + list(self.head.parameters())
+            self._trainable_body_params = [p for p in self.body.parameters() if p.requires_grad]
+            
+            # Set up per-layer learning rates for body if specified
+            if body_lr_multipliers is not None:
+                # Create parameter groups with different learning rates
+                param_groups = []
+                
+                # Head parameters (full learning rate)
+                param_groups.append({
+                    'params': list(self.head.parameters()),
+                    'lr': outer_lr,
+                    'name': 'head'
+                })
+                
+                # Track which keys were actually used for debugging
+                used_keys = set()
+                
+                # Body parameters (layer-specific learning rates)
+                for name, param in self.body.named_parameters():
+                    if not param.requires_grad:
+                        continue
+                    # Find matching multiplier - check longest match first for specificity
+                    multiplier = body_lr_multipliers.get('default', 1.0)
+                    best_match_len = 0
+                    best_key = None
+                    
+                    for key, mult in body_lr_multipliers.items():
+                        if key == 'default':
+                            continue
+                        
+                        # Support both exact matches and pattern matching
+                        # Try exact match first, then partial matches
+                        if key == name or key in name:
+                            if len(key) > best_match_len:
+                                multiplier = mult
+                                best_match_len = len(key)
+                                best_key = key
+                    
+                    if best_key:
+                        used_keys.add(best_key)
+                    
+                    param_groups.append({
+                        'params': [param],
+                        'lr': outer_lr * multiplier,
+                        'name': f'body.{name}'
+                    })
+                
+                params_to_optimize = param_groups
+            else:
+                # Single learning rate for all parameters
+                params_to_optimize = list(self.body.parameters()) + list(self.head.parameters())
 
             body_params = sum(p.numel() for p in self.body.parameters())
             head_params = sum(p.numel() for p in self.head.parameters())
             print(f"ANIL Configuration: Trainable Body + Head")
             print(f"  Body parameters: {body_params:,}")
             print(f"  Head parameters: {head_params:,}")
+            if body_lr_multipliers is not None:
+                print(f"  Body LR multipliers: {body_lr_multipliers}")
+            if warmup_steps > 0:
+                print(f"  Warmup steps: {warmup_steps} (head only)")
 
         # Initialize meta-optimizer
         if optimizer_kwargs is None:
@@ -235,8 +305,8 @@ class ANIL:
             # Clone and ensure requires_grad is True for gradient computation
             head_params[name] = param.clone().requires_grad_(True)
         return head_params
-    
-    def forward_with_head(self, x: torch.Tensor, head_params: Dict[str, torch.Tensor]) -> torch.Tensor:
+
+    def forward_with_head(self, x: torch.Tensor, head_params: Dict[str, torch.Tensor], is_inner_loop: bool = False) -> torch.Tensor:
         """
         Forward pass using custom head parameters while keeping body fixed.
         
@@ -247,25 +317,11 @@ class ANIL:
         Returns:
             torch.Tensor: Model output
         """
-        # Extract features using body
-        # Body mode is already set by caller (train/eval)
-        # During outer loop: body.train() - needs gradients for meta-update
-        # During inner loop: body.eval() - frozen, but still compute gradients for meta-learning
-        features = self.body(x)
-
-        # If body is frozen, we need to detach features from the frozen conv layers
-        # but keep gradients flowing for BatchNorm parameters
-        # Check if any BatchNorm parameters are trainable
-        # has_trainable_bn = any(
-        #     isinstance(m, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)) and 
-        #     any(p.requires_grad for p in m.parameters())
-        #     for m in self.body.modules()
-        # )
-        
-        # if self.freeze_body and not has_trainable_bn:
-        #     # Fully frozen body - detach features
-        #     features = features.detach().requires_grad_(True)
-        # If has_trainable_bn, don't detach - we need gradients to flow back to BatchNorm
+        if is_inner_loop and (self.freeze_body or self.first_order):
+            with torch.no_grad():
+                features = self.body(x)
+        else:
+            features = self.body(x)
 
         # Apply head with custom parameters
         output = torch.func.functional_call(self.head, head_params, features)
@@ -289,7 +345,7 @@ class ANIL:
         
         # Perform multiple gradient steps on head only
         for step in range(self.inner_steps):
-            logits = self.forward_with_head(support_data, fast_head)
+            logits = self.forward_with_head(support_data, fast_head, is_inner_loop=True)
             loss = F.cross_entropy(logits, support_labels)
             
             # CRITICAL FIX: Compute gradients w.r.t. head parameters only
@@ -318,11 +374,32 @@ class ANIL:
     query_data_batch: torch.Tensor,
     query_labels_batch: torch.Tensor
     ) -> float:
+        
         self.head.train()
+        
         self.body.eval()  # Body in eval mode since frozen, but BatchNorm will be overridden
         set_batchnorm_training(self.body, training=True)  # Force BatchNorm to training mode
         
         self.meta_optimizer.zero_grad()
+        
+        # Warmup logic: adjust learning rates based on current step
+        # When using parameter groups, we control training via learning rates, not requires_grad
+        if not self.freeze_body and self.warmup_steps > 0:
+            if self.current_step < self.warmup_steps:
+                # During warmup: set body learning rates to 0
+                if not self._body_frozen:
+                    for param_group in self.meta_optimizer.param_groups:
+                        if param_group.get('name', '').startswith('body.'):
+                            param_group['_original_lr'] = param_group['lr']
+                            param_group['lr'] = 0.0
+                    self._body_frozen = True
+            else:
+                # After warmup: restore body learning rates
+                if self._body_frozen:
+                    for param_group in self.meta_optimizer.param_groups:
+                        if param_group.get('name', '').startswith('body.'):
+                            param_group['lr'] = param_group.get('_original_lr', param_group['lr'])
+                    self._body_frozen = False
         
         device = next(self.head.parameters()).device
         meta_loss_sum = torch.tensor(0.0, device=device)
@@ -335,141 +412,47 @@ class ANIL:
                 query_data = query_data_batch[i]
                 query_labels = query_labels_batch[i]
                 
-                self.body.eval()
-                set_batchnorm_training(self.body, training=True)
+                fast_head = self.inner_update(support_data, support_labels)
                 
-                # Inner loop: adapt head
-                fast_head = {
-                    name: param.detach().clone().requires_grad_(True)
-                    for name, param in self.head.named_parameters()
-                }
-                
-                for step in range(self.inner_steps):
-                    # Get features (no gradients needed during inner loop)
-                    with torch.no_grad():
-                        features = self.body(support_data)
-                    
-                    # CRITICAL: Enable gradients on features for head adaptation
-                    features = features.requires_grad_(True)
-                    
-                    logits = torch.func.functional_call(self.head, fast_head, features)
-                    loss = F.cross_entropy(logits, support_labels)
-                    grads = torch.autograd.grad(loss, fast_head.values(), create_graph=False)
-                    
-                    fast_head = {
-                        name: param - self.inner_lr * grad
-                        for (name, param), grad in zip(fast_head.items(), grads)
-                    }
-                
-                # Outer loop: evaluate on query set
-                self.body.eval()
-                set_batchnorm_training(self.body, training=True)
-                
-                # CRITICAL FIX: Need different handling based on freeze_body
-                if self.freeze_body:
-                    # Body is frozen: compute features WITH gradients for BatchNorm
-                    # but gradients won't flow to frozen conv layers (requires_grad=False)
-                    # We need gradients enabled so BatchNorm params can get their gradients
-                    features = self.body(query_data)
-                else:
-                    # Body is trainable: compute features WITH gradients
-                    # Features must maintain connection to body parameters
-                    features = self.body(query_data)
-                
-                # Ensure fast_head parameters have gradients enabled
-                for param in fast_head.values():
-                    param.requires_grad_(True)
-                
+                features = self.body(query_data)
+                                
                 # Compute query loss
                 logits = torch.func.functional_call(self.head, fast_head, features)
                 query_loss = F.cross_entropy(logits, query_labels)
                 
-                # CRITICAL FIX: Different gradient computation based on freeze_body
-                if self.freeze_body:
-                    # Frozen body: Manually compute gradients for head + BatchNorm
-                    trainable_body_params = []
-                    for module in self.body.modules():
-                        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
-                            trainable_body_params.extend([p for p in module.parameters() if p.requires_grad])
-                    
-                    # Also include trainable modules if any
-                    for tm in self.trainable_body_modules:
-                        trainable_body_params.extend([p for p in tm.parameters() if p.requires_grad])
-                    
-                    # Compute gradients for head parameters
-                    grads_head = torch.autograd.grad(
-                        query_loss,
-                        fast_head.values(),
-                        create_graph=False,
-                        retain_graph=len(trainable_body_params) > 0,
-                        allow_unused=True
-                    )
-                    
-                    # Apply gradients to ORIGINAL head parameters
-                    for (name, original_param), grad in zip(self.head.named_parameters(), grads_head):
-                        if grad is not None:
-                            if original_param.grad is None:
-                                original_param.grad = grad.clone() / batch_size
-                            else:
-                                original_param.grad += grad / batch_size
-                    
-                    # Compute and apply gradients to trainable body parameters (BatchNorm)
-                    if len(trainable_body_params) > 0:
-                        grads_body = torch.autograd.grad(
-                            query_loss,
-                            trainable_body_params,
-                            create_graph=False,
-                            retain_graph=False,
-                            allow_unused=True
-                        )
-                        
-                        for param, grad in zip(trainable_body_params, grads_body):
-                            if grad is not None:
-                                if param.grad is None:
-                                    param.grad = grad.clone() / batch_size
-                                else:
-                                    param.grad += grad / batch_size
-                else:
-                    # Trainable body: Use standard backward() for ALL parameters
-                    # This is the CORRECT approach for first-order ANIL with trainable body
-                    # The gradients flow through: query_loss -> fast_head -> features -> body
-                    
-                    # First, compute gradients w.r.t. fast_head parameters
-                    grads_head = torch.autograd.grad(
-                        query_loss,
-                        fast_head.values(),
-                        create_graph=False,
-                        retain_graph=True,  # Keep graph for body gradients
-                        allow_unused=True
-                    )
-                    
-                    # Apply gradients to ORIGINAL head parameters
-                    for (name, original_param), grad in zip(self.head.named_parameters(), grads_head):
-                        if grad is not None:
-                            if original_param.grad is None:
-                                original_param.grad = grad.clone() / batch_size
-                            else:
-                                original_param.grad += grad / batch_size
-                    
-                    # Now compute gradients w.r.t. body parameters
-                    # These flow through the features that were computed WITH gradients
-                    trainable_body_params = [p for p in self.body.parameters() if p.requires_grad]
-                    
-                    grads_body = torch.autograd.grad(
-                        query_loss,
-                        trainable_body_params,
-                        create_graph=False,
-                        retain_graph=False,
-                        allow_unused=True
-                    )
-                    
-                    for param, grad in zip(trainable_body_params, grads_body):
-                        if grad is not None:
-                            if param.grad is None:
-                                param.grad = grad.clone() / batch_size
-                            else:
-                                param.grad += grad / batch_size
+                # Compute gradients for both head and body in one call
+                # This is efficient since we use self._trainable_body_params 
+                # which is pre-computed in __init__ based on freeze_body
+                all_params = list(fast_head.values()) + self._trainable_body_params
+                all_grads = torch.autograd.grad(
+                    query_loss,
+                    all_params,
+                    create_graph=False,
+                    retain_graph=False,
+                    allow_unused=True
+                )
                 
+                # Split gradients into head and body
+                num_head_params = len(fast_head)
+                grads_head = all_grads[:num_head_params]
+                grads_body = all_grads[num_head_params:]
+                
+                # Apply gradients to ORIGINAL head parameters
+                for (name, original_param), grad in zip(self.head.named_parameters(), grads_head):
+                    if grad is not None:
+                        if original_param.grad is None:
+                            original_param.grad = grad.clone() / batch_size
+                        else:
+                            original_param.grad += grad / batch_size
+                
+                # Apply gradients to body parameters
+                for param, grad in zip(self._trainable_body_params, grads_body):
+                    if grad is not None:
+                        if param.grad is None:
+                            param.grad = grad.clone() / batch_size
+                        else:
+                            param.grad += grad / batch_size
+                    
                 meta_loss_sum += query_loss.detach()
         else:
             for i in range(batch_size):
@@ -482,8 +465,6 @@ class ANIL:
                 set_batchnorm_training(self.body, training=True)  # Ensure BatchNorm training mode
                 fast_head = self.inner_update(support_data, support_labels)
                 
-                self.body.eval()
-                set_batchnorm_training(self.body, training=True)
                 query_logits = self.forward_with_head(query_data, fast_head)
                 query_loss = F.cross_entropy(query_logits, query_labels)
                 (query_loss / batch_size).backward()
@@ -493,10 +474,7 @@ class ANIL:
         # Clip gradients for all trainable parameters
         if self.freeze_body:
             # Clip head + BatchNorm parameters
-            trainable_params = [p for p in self.head.parameters()]
-            for module in self.body.modules():
-                if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
-                    trainable_params.extend(module.parameters())
+            trainable_params = list(self.head.parameters()) + list(self._trainable_body_params)
             torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
         else:
             # Clip all parameters
@@ -504,6 +482,10 @@ class ANIL:
             torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
         
         self.meta_optimizer.step()
+        
+        # Increment step counter for warmup tracking
+        if not self.freeze_body and self.warmup_steps > 0:
+            self.current_step += 1
         
         return (meta_loss_sum / batch_size).item()
 
@@ -513,10 +495,13 @@ def train_anil(
     head: torch.nn.Module,
     task_dataloader: torch.utils.data.DataLoader,
     freeze_body: bool = False,
+    adaptive_body: bool = False,
     trainable_body_modules: Optional[list] = None,
     inner_lr: float = 0.01,
     outer_lr: float = 0.001,
     inner_steps: int = 5,
+    body_lr_multipliers: Optional[Dict[str, float]] = None,
+    warmup_steps: int = 500,
     optimizer_cls: Type[optim.Optimizer] = optim.Adam,
     optimizer_kwargs: Optional[Dict] = None,
     first_order: bool = False,
@@ -530,11 +515,14 @@ def train_anil(
         head (torch.nn.Module): Classifier/output network
         task_dataloader (DataLoader): Dataloader yielding task batches
         freeze_body (bool): Freeze body completely
+        adaptive_body (bool): Use adaptive body updates with warmup
         trainable_body_modules (list): List of specific submodules to keep trainable
             even when freeze_body=True (e.g., adapter networks)
         inner_lr (float): Learning rate for inner loop adaptation
         outer_lr (float): Meta-learning rate for outer loop
         inner_steps (int): Number of gradient steps in inner loop
+        body_lr_multipliers (dict): For adaptive mode, per-layer LR multipliers
+        warmup_steps (int): For adaptive mode, warmup period
         optimizer_cls (type): Optimizer class
         optimizer_kwargs (dict): Additional optimizer arguments
         first_order (bool): Use first-order approximation
@@ -562,6 +550,15 @@ def train_anil(
         ...     trainable_body_modules=[adapter_body.adapter],  # Keep adapter trainable
         ...     bn_warmup_batches=50
         ... )
+        >>>
+        >>> # Adaptive pretrained body
+        >>> body_lrs = {'0': 0.01, '5': 0.05, 'default': 0.1}
+        >>> body, head, anil, losses = train_anil(
+        ...     body, head, dataloader,
+        ...     adaptive_body=True,
+        ...     body_lr_multipliers=body_lrs,
+        ...     warmup_steps=1000
+        ... )
     """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -569,21 +566,32 @@ def train_anil(
     body = body.to(device)
     head = head.to(device)
     
-    anil = ANIL(
-        body, head,
-        inner_lr=inner_lr, outer_lr=outer_lr, inner_steps=inner_steps,
-        freeze_body=freeze_body,
-        trainable_body_modules=trainable_body_modules,
-        optimizer_cls=optimizer_cls, optimizer_kwargs=optimizer_kwargs,
-        first_order=first_order
-    )
-    if freeze_body:
-        if trainable_body_modules:
-            variant_name = "ANIL (Frozen Body with Trainable Modules)"
-        else:
-            variant_name = "ANIL (Frozen Pretrained Body)"
+    if adaptive_body:
+        anil = ANIL(
+            body, head,
+            inner_lr=inner_lr, outer_lr=outer_lr, inner_steps=inner_steps,
+            body_lr_multipliers=body_lr_multipliers, warmup_steps=warmup_steps,
+            optimizer_cls=optimizer_cls, optimizer_kwargs=optimizer_kwargs,
+            first_order=first_order
+        )
+        variant_name = "ANIL (Adaptive Pretrained Body)"
     else:
-        variant_name = "ANIL (Original)"
+        anil = ANIL(
+            body, head,
+            inner_lr=inner_lr, outer_lr=outer_lr, inner_steps=inner_steps,
+            freeze_body=freeze_body,
+            trainable_body_modules=trainable_body_modules,
+            optimizer_cls=optimizer_cls, optimizer_kwargs=optimizer_kwargs,
+            first_order=first_order
+        )
+        # Only set variant_name for standard ANIL (not adaptive)
+        if freeze_body:
+            if trainable_body_modules:
+                variant_name = "ANIL (Frozen Body with Trainable Modules)"
+            else:
+                variant_name = "ANIL (Frozen Pretrained Body)"
+        else:
+            variant_name = "ANIL (Original)"
     
     print(f"\nStarting {variant_name} training...")
     print(f"Hyperparameters: inner_lr={inner_lr}, outer_lr={outer_lr}, inner_steps={inner_steps}")
@@ -630,6 +638,13 @@ def train_anil(
                 'Batch': batch_idx + 1
             }
             
+            if adaptive_body:
+                progress_info['Step'] = anil.current_step
+                if anil.current_step < anil.warmup_steps:
+                    progress_info['Phase'] = 'Warmup'
+                else:
+                    progress_info['Phase'] = 'Full'
+
             if torch.cuda.is_available():
                 progress_info['GPU%'] = f'{torch.cuda.utilization()}'
             
