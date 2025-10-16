@@ -14,11 +14,6 @@ Test 9: Backward Compatibility
 
 """
 
-import sys
-import os
-# Add parent directory to path so we can import from algorithms package
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
