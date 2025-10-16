@@ -8,7 +8,7 @@ A modular collection of meta-learning algorithm implementations built from scrat
 
 Meta-learning (or "learning to learn") enables models to quickly adapt to new tasks with minimal training data. Unlike traditional machine learning that learns a specific task, meta-learning algorithms learn how to efficiently learn new tasks.
 
-**Current Status**: ✅ MAML & FOMAML Complete | ✅ ANIL Complete | ✅ Both Meta Networks Variants Complete | ✅ Meta Dropout Implemented | 🚧 More algorithms coming soon!
+**Current Status**: ✅ MAML & FOMAML Complete | ✅ MAML++ Complete | ✅ Meta-SGD Complete | ✅ ANIL Complete | ✅ Both Meta Networks Variants Complete | ✅ Meta Dropout Implemented | 🚧 More algorithms coming soon!
 
 ## 🎯 Features
 
@@ -32,7 +32,31 @@ A flexible meta-learning approach that trains a model's initial parameters to en
 - **Meta Dropout**: +1.2% accuracy, -8.9% variance
 - [Original Paper](https://arxiv.org/abs/1703.03400)
 
-**Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML.md)
+**Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML_vs_MAMLpp.md)
+
+### ✅ Meta-SGD (Meta Stochastic Gradient Descent)
+An extension of MAML that learns **per-parameter learning rates** during meta-training, allowing each weight to have its own personalized adaptation speed.
+
+**Key Features:**
+- **Personalized learning rates**: Each parameter learns its own optimal learning rate
+- **Better adaptation**: Parameters converge more efficiently with tailored step sizes
+- **Double the parameters**: Meta-learns both θ (weights) and α (learning rates)
+- **Second-order only**: Requires full MAML (incompatible with first-order approximation)
+- **79.5% accuracy**: Achieves strong performance on Omniglot 5-way 1-shot
+- [Original Paper](https://arxiv.org/abs/1707.09835)
+
+**Performance (5-way 1-shot Omniglot):**
+- Test Accuracy: 79.5%
+- Parameters: 2× MAML (learns both weights and learning rates)
+- Training: Requires second-order gradients (create_graph=True)
+
+**Key Insights:**
+- Learning rates must be tensor-shaped (same shape as parameters)
+- Cannot use first-order approximation (needs full computation graph)
+- Learns which parameters need aggressive vs careful updates
+- Particularly effective when different layers need different adaptation speeds
+
+**Documentation:** See [Meta-SGD Guide](docs/META_SGD.md)
 
 ### ✅ First-Order MAML (FOMAML)
 A memory-efficient variant of MAML that omits second-order derivatives, offering:
@@ -40,7 +64,7 @@ A memory-efficient variant of MAML that omits second-order derivatives, offering
 - **Lower memory usage**: No need to store computation graph for second derivatives
 - **Comparable performance**: Often matches MAML accuracy with reduced computational cost
 
-**Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML.md)
+**Documentation:** See [MAML vs FOMAML Comparison](docs/MAML_vs_FOMAML_vs_MAMLpp.md)
 
 ### ✅ ANIL (Almost No Inner Loop)
 A simplified and faster variant of MAML that only adapts the head (final layer) during the inner loop while keeping the body (feature extractor) frozen. Achieves 3-10x speedup with minimal accuracy loss.
@@ -124,7 +148,7 @@ The true implementation of Meta Networks from the original paper (Munkhdalai & Y
 ```
 meta-learning-from-scratch/
 ├── algorithms/                  # Core algorithm implementations
-│   ├── maml.py                  # MAML & FOMAML implementation
+│   ├── maml.py                  # MAML, FOMAML & Meta-SGD implementation
 │   ├── anil.py                  # ANIL implementation (4 training scenarios)
 │   ├── eb_meta_network.py       # Embedding-based Meta Networks
 │   ├── original_meta_network.py # Original Meta Networks (model-based)
@@ -142,7 +166,8 @@ meta-learning-from-scratch/
 │   ├── load_omniglot.py         # Dataset loaders (standard + prefetched)
 │   └── visualize_omniglot.py    # Dataset visualization tools
 ├── docs/                        # Documentation
-│   ├── MAML_vs_FOMAML.md        # MAML and FOMAML comparison
+│   ├── MAML_vs_FOMAML_vs_MAMLpp.md # MAML, FOMAML, and Meta-SGD comparison
+│   ├── META_SGD.md              # Meta-SGD comprehensive guide
 │   ├── ANIL.md                  # ANIL comprehensive guide (4 scenarios)
 │   ├── META_DROPOUT_USAGE.md    # Meta Dropout usage guide
 │   ├── PREFETCHED_DATASET.md    # Prefetched dataset guide (10-50x faster!)
@@ -150,7 +175,7 @@ meta-learning-from-scratch/
 │   ├── ORIGINAL_META_NETWORK_OVERVIEW.md # Original Meta Networks guide
 │   └── META_DROPOUT_IN_META_NETWORKS.md # Meta Dropout integration (both variants)
 ├── examples/                    # Tutorial notebooks and scripts
-│   ├── maml_on_omniglot.ipynb   # Complete MAML tutorial notebook
+│   ├── maml_on_omniglot.ipynb   # Complete MAML & Meta-SGD tutorial notebook
 │   ├── anil_on_omniglot.ipynb   # ANIL tutorial (4 training scenarios)
 │   ├── embedding_based_meta_network.ipynb # Embedding-based Meta Networks tutorial
 │   ├── meta_network.ipynb       # Original Meta Networks tutorial
@@ -254,7 +279,7 @@ task_dataloader = DataLoader(
 
 See [Prefetched Dataset Guide](docs/PREFETCHED_DATASET.md) for details.
 
-#### Training MAML/FOMAML
+#### Training MAML/FOMAML/Meta-SGD
 
 ```python
 import torch
@@ -266,33 +291,44 @@ from torch.utils.data import DataLoader
 
 # 1. Load your dataset
 dataset = OmniglotDataset("omniglot/images_background")
-#### Training MAML/FOMAML
 
-```python
+# 2. Create task dataset (5-way 1-shot)
+task_dataset = OmniglotTaskDataset(
+	dataset,
+	n_way=5,
+	k_shot=1,
+	k_query=15,
+	num_tasks=2000
+)
+
+task_dataloader = DataLoader(task_dataset, batch_size=4, shuffle=True)
+
 # 3. Define your model (with optional Meta Dropout)
-from algorithms.cnn_maml import SimpleConvNet
-
 model = SimpleConvNet(
 	num_classes=5,
 	dropout_rates=[0.05, 0.10, 0.15, 0.05]  # Validated configuration
 )
 
-# 4. Train with MAML or FOMAML
-from algorithms.maml import train_maml
-
+# 4. Train with MAML, FOMAML, or Meta-SGD
 model, maml, losses = train_maml(
 	model=model,
 	task_dataloader=task_dataloader,
 	inner_lr=0.01,  # Task adaptation learning rate
 	outer_lr=0.001,  # Meta-learning rate
 	inner_steps=5,  # Adaptation steps per task
-	first_order=False  # Set True for FOMAML
+	first_order=False,  # Set True for FOMAML
+	meta_sgd=False  # Set True for Meta-SGD (requires first_order=False)
 )
 
 # 5. Evaluate on test tasks
 eval_results = evaluate_maml(model, maml, test_dataloader, num_classes=5)
 plot_evaluation_results(eval_results)
 ```
+
+**Key Training Options:**
+- **MAML**: `first_order=False, meta_sgd=False` (full second-order gradients)
+- **FOMAML**: `first_order=True, meta_sgd=False` (faster, first-order approximation)
+- **Meta-SGD**: `first_order=False, meta_sgd=True` (learnable per-parameter learning rates)
 
 #### Training Embedding-based Meta Networks
 
@@ -397,8 +433,9 @@ See [ANIL Guide](docs/ANIL.md) for detailed explanation of all 4 training scenar
 ### Core Algorithm Implementations
 
 **`MAML.py`** - Model-Agnostic Meta-Learning
-- Complete MAML & FOMAML implementation with inner/outer loop optimization
+- Complete MAML, FOMAML & Meta-SGD implementation with inner/outer loop optimization
 - Supports first-order approximation for memory efficiency
+- Meta-SGD: Learnable per-parameter learning rates for personalized adaptation
 - GPU optimized with gradient clipping and batch processing
 
 **`ANIL.py`** - Almost No Inner Loop
@@ -451,12 +488,14 @@ See [ANIL Guide](docs/ANIL.md) for detailed explanation of all 4 training scenar
 
 ## 🎓 Tutorial Notebooks
 
-**`maml_on_omniglot.ipynb`** - Complete MAML walkthrough:
+**`maml_on_omniglot.ipynb`** - Complete MAML & Meta-SGD walkthrough:
 1. Dataset exploration and task visualization
 2. Model architecture and Meta Dropout integration
 3. MAML training with step-by-step explanations
-4. Evaluation and performance analysis
-5. Results visualization and interpretation
+4. Meta-SGD: Training with learnable per-parameter learning rates
+5. Evaluation and performance analysis
+6. Results visualization and interpretation
+7. Debugging tools for analyzing learned learning rates
 
 **`anil_on_omniglot.ipynb`** - ANIL comprehensive tutorial:
 1. Introduction to ANIL and comparison with MAML
@@ -490,12 +529,18 @@ See [ANIL Guide](docs/ANIL.md) for detailed explanation of all 4 training scenar
 |-----------|------------------|------------------|---------------|---------|
 | **MAML** | 20-30% | 75-80% | Baseline (1x) | High |
 | **FOMAML** | 20-30% | 75-80% | 1.4x faster | Medium |
+| **Meta-SGD** | 20-30% | **79.5%** | 1x (same as MAML) | Very High (2×) |
 | **ANIL (First-Order)** | 20% | **77%** | **3x faster** | Medium |
 | **ANIL (Frozen)** | 20% | **90.5%** 🏆 | **3x faster** | Medium |
 | **EB Meta Networks** | - | 77% | Very Fast | Low |
 | **Original Meta Networks** | - | **86%** | Very Fast | Low |
-| Improvement | 45-60%      |
-| Training Time (GPU) | 3-10 min |
+
+**Key Takeaways:**
+- Meta-SGD achieves best gradient-based accuracy (79.5%) but doubles memory usage
+- ANIL (Frozen) achieves highest overall accuracy (90.5%) with 3× speedup
+- Original Meta Networks achieve 86% with single forward pass (no gradient-based adaptation)
+- Improvement from random: 45-60% → 75-90%
+- Training time (GPU): 3-10 minutes per algorithm
 
 ## 🔧 Adapting to Your Dataset
 
@@ -578,6 +623,7 @@ This is a learning project, but suggestions and improvements are welcome! Feel f
 ## 📚 References
 
 - [MAML Paper](https://arxiv.org/abs/1703.03400) - Finn et al., 2017
+- [Meta-SGD Paper](https://arxiv.org/abs/1707.09835) - Li et al., 2017
 - [ANIL Paper](https://arxiv.org/abs/1909.09157) - Raghu et al., ICLR 2020
 - [Meta Networks Paper](https://arxiv.org/abs/1703.00837) - Munkhdalai & Yu, 2017
 - [Omniglot Dataset](https://github.com/brendenlake/omniglot) - Lake et al., 2015
