@@ -16,6 +16,7 @@ Reference:
     https://arxiv.org/abs/1703.03400
 """
 
+from typing import Generator, Union
 import numpy as np
 import torch
 import torch.optim as optim
@@ -163,7 +164,9 @@ class ModelAgnosticMetaLearning:
         optimizer_cls: type = optim.Adam, 
         optimizer_kwargs: dict = None,
         first_order: bool = False,
-        algorithm: str = None
+        use_reptile: bool = False,
+        algorithm: str = None,
+        plus_plus: bool = False
     ):
         """
         Initialize the MAML algorithm.
@@ -215,20 +218,56 @@ class ModelAgnosticMetaLearning:
                   
                 FOMAML is typically 30-50% faster and uses ~50% less memory than MAML,
                 with only a small decrease in final performance (usually 1-3% accuracy).
+
+            use_reptile (bool, optional):
+                Whether to use Reptile algorithm instead of MAML/FOMAML.
+                Default: False (use MAML or FOMAML based on first_order flag)
+                
+                - False: Use MAML (if first_order=False) or FOMAML (if first_order=True)
+                - True: Use Reptile algorithm with parameter interpolation
+                
+                Reptile is typically 2x faster than MAML and doesn't require gradients
+                in the outer loop. Note: When use_reptile=True, outer_lr typically
+                needs to be 10-100x larger (e.g., 0.1 instead of 0.001).
             
             algorithm (str, optional):
                 Algorithm variant to use: 'maml', 'fomaml', or 'reptile'.
-                If provided, this overrides the first_order parameter.
-                Default: None (use first_order parameter)
+                If provided, this overrides first_order and use_reptile parameters.
+                Default: None (use first_order and use_reptile parameters)
                 
-                - 'maml': Full MAML with second-order gradients
-                - 'fomaml': First-Order MAML approximation
-                - 'reptile': Reptile algorithm (also first-order)
+                - 'maml': Full MAML with second-order gradients (first_order=False, use_reptile=False)
+                - 'fomaml': First-Order MAML (first_order=True, use_reptile=False)
+                - 'reptile': Reptile algorithm (use_reptile=True)
+
+            plus_plus (bool, optional):
+                Whether to use MAML++ (MAML Plus Plus) enhancements.
+                Default: False (use vanilla MAML)
+
+                MAML++ introduces several improvements over the original MAML:
+                - Adaptive learning rates for each task
+                - Better initialization strategies
+                - More robust to overfitting
+
+                These enhancements can lead to improved performance, especially in
+                challenging few-shot learning scenarios.
+
+                NOTE: MAML++ does not support FOMAML. If plus_plus=True, then first_order must be False.
         
         Raises:
             ValueError: If algorithm is not one of ['maml', 'fomaml', 'reptile', None]
+        
+        Examples:
+            >>> # Method 1: Using boolean flags
+            >>> maml = ModelAgnosticMetaLearning(model, first_order=False, use_reptile=False)  # MAML
+            >>> fomaml = ModelAgnosticMetaLearning(model, first_order=True, use_reptile=False)  # FOMAML
+            >>> reptile = ModelAgnosticMetaLearning(model, use_reptile=True)  # Reptile
+            
+            >>> # Method 2: Using algorithm parameter
+            >>> maml = ModelAgnosticMetaLearning(model, algorithm='maml')
+            >>> fomaml = ModelAgnosticMetaLearning(model, algorithm='fomaml')
+            >>> reptile = ModelAgnosticMetaLearning(model, algorithm='reptile')
         """
-        # Handle algorithm parameter
+        # Handle algorithm parameter (takes precedence over boolean flags)
         if algorithm is not None:
             valid_algorithms = ['maml', 'fomaml', 'reptile']
             if algorithm not in valid_algorithms:
@@ -236,22 +275,59 @@ class ModelAgnosticMetaLearning:
                     f"Invalid algorithm '{algorithm}'. Must be one of {valid_algorithms}"
                 )
             self.algorithm = algorithm
-            # Set first_order based on algorithm
+            # Set flags based on algorithm
+            # Reptile is also first-order (doesn't use second-order gradients)
             self.first_order = (algorithm != 'maml')
+            self.use_reptile = (algorithm == 'reptile')
         else:
-            # Backward compatibility: infer algorithm from first_order
-            self.algorithm = 'fomaml' if first_order else 'maml'
+            # Use boolean flags to determine algorithm
             self.first_order = first_order
+            self.use_reptile = use_reptile
+            
+            # Infer algorithm name from flags
+            if use_reptile:
+                self.algorithm = 'reptile'
+            elif first_order:
+                self.algorithm = 'fomaml'
+            else:
+                self.algorithm = 'maml'
         
         self.model = model
         self.inner_lr = inner_lr
         self.outer_lr = outer_lr
         self.inner_steps = inner_steps
-        
-        # Initialize meta-optimizer with custom class and kwargs
-        if optimizer_kwargs is None:
-            optimizer_kwargs = {}
-        self.meta_optimizer = optimizer_cls(self.model.parameters(), lr=outer_lr, **optimizer_kwargs)
+        self.plus_plus = plus_plus
+
+        if self.plus_plus and self.first_order:
+            raise ValueError("MAML++ does not support FOMAML. Set first_order=False when plus_plus=True.")
+
+        if self.plus_plus and self.use_reptile:
+            raise ValueError("MAML++ does not support Reptile. Set plus_plus=False when use_reptile=True.")
+
+        if self.plus_plus:
+            # Pre-compute and cache parameter names for efficient dictionary reconstruction
+            self.param_names = [name for name, _ in self.model.named_parameters()]
+            
+            # Initialize per-parameter learning rates for MAML++
+            # Use ParameterList to properly register parameters
+            self.alpha = torch.nn.ParameterList([
+                torch.nn.Parameter(torch.tensor(self.inner_lr, dtype=torch.float32)) 
+                for _ in self.model.parameters()
+            ])
+            
+            # CRITICAL: Add alpha parameters to meta-optimizer!
+            if optimizer_kwargs is None:
+                optimizer_kwargs = {}
+            self.meta_optimizer = optimizer_cls(
+                list(self.model.parameters()) + list(self.alpha.parameters()),
+                lr=outer_lr, 
+                **optimizer_kwargs
+            )
+        else:
+            # Standard MAML: only optimize model parameters
+            if optimizer_kwargs is None:
+                optimizer_kwargs = {}
+            self.meta_optimizer = optimizer_cls(self.model.parameters(), lr=outer_lr, **optimizer_kwargs)
         
     def inner_update(self, support_data: torch.Tensor, support_labels: torch.Tensor) -> dict:
         """
@@ -351,7 +427,7 @@ class ModelAgnosticMetaLearning:
                 allow_unused=False
             )
             
-            # Update fast weights
+            # Update fast weights with fixed learning rate
             fast_weights = {
                 name: param - self.inner_lr * grad
                 for (name, param), grad in zip(fast_weights.items(), grads)
@@ -544,7 +620,54 @@ class ModelAgnosticMetaLearning:
         
         batch_size = support_data_batch.size(0)
         
-        if self.first_order:
+        if self.use_reptile:
+            # REPTILE: Parameter interpolation (no outer loop gradients needed!)
+            # This is why Reptile is ~2x faster than MAML - no backprop through outer loop
+            for i in range(batch_size):
+                support_data = support_data_batch[i]
+                support_labels = support_labels_batch[i]
+                query_data = query_data_batch[i]
+                query_labels = query_labels_batch[i]
+                
+                # Reset Meta Dropout masks for this task (if model supports it)
+                if hasattr(self.model, 'reset_dropout_masks'):
+                    task_batch_size = support_data.size(0)
+                    self.model.reset_dropout_masks(task_batch_size, device)
+                
+                # Store original parameters before adaptation
+                original_params = {name: param.clone() 
+                                 for name, param in self.model.named_parameters()}
+                
+                # Inner loop: Adapt to task (multiple SGD steps on support set)
+                # This modifies model parameters in-place
+                fast_weights = self.inner_update(support_data, support_labels)
+                
+                # Evaluate on query set for logging (optional, just for monitoring)
+                if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
+                    self.model._outer_loop_mode = True
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
+                    self.model._outer_loop_mode = False
+                else:
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
+                
+                # Accumulate loss for logging
+                meta_loss_sum += query_loss.detach()
+                
+                # REPTILE UPDATE: Interpolate between original and adapted parameters
+                # θ ← θ + ε(θ' - θ) where θ' is adapted parameters, ε is outer_lr
+                # This is equivalent to: θ ← (1-ε)θ + εθ'
+                with torch.no_grad():
+                    for (name, param), adapted_param in zip(self.model.named_parameters(), 
+                                                            fast_weights.values()):
+                        # Compute interpolation: move towards adapted parameters
+                        param.data.add_(adapted_param - original_params[name], 
+                                      alpha=self.outer_lr / batch_size)
+            
+            # Note: No optimizer step needed for Reptile - we update parameters directly!
+            
+        elif self.first_order:
             # FOMAML: First-order approximation
             # Treat adapted parameters as independent of meta-parameters
             for i in range(batch_size):
@@ -570,11 +693,11 @@ class ModelAgnosticMetaLearning:
                 # Outer loop: Compute query loss WITHOUT dropout using context manager
                 # This is Meta Dropout Option 2: dropout only in inner loop
                 # ⚡ ULTRA-OPTIMIZED: Context manager just sets a boolean flag (zero overhead!)
-                if hasattr(self.model, 'outer_loop_mode'):
-                    # Use context manager - automatic cleanup, exception-safe
-                    with self.model.outer_loop_mode():
-                        query_logits = self.forward_with_weights(query_data, fast_weights)
-                        query_loss = F.cross_entropy(query_logits, query_labels)
+                if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
+                    self.model._outer_loop_mode = True  # Enable outer loop mode (skips dropout)
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
+                    self.model._outer_loop_mode = False  # Restore inner loop mode
                 else:
                     # No Meta Dropout available - use full network
                     query_logits = self.forward_with_weights(query_data, fast_weights)
@@ -610,21 +733,70 @@ class ModelAgnosticMetaLearning:
                     task_batch_size = support_data.size(0)
                     self.model.reset_dropout_masks(task_batch_size, device)
                 
-                # Inner loop adaptation WITH dropout (train mode)
-                fast_weights = self.inner_update(support_data, support_labels)
-                
-                # Outer loop evaluation WITHOUT dropout using context manager
-                # This is Meta Dropout Option 2: dropout only in inner loop
-                # ⚡ ULTRA-OPTIMIZED: Context manager just sets a boolean flag (zero overhead!)
-                if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
-                    # Use context manager - automatic cleanup, exception-safe
-                    self.model._outer_loop_mode = True
-                    query_logits = self.forward_with_weights(query_data, fast_weights)
-                    query_loss = F.cross_entropy(query_logits, query_labels)
-                    self.model._outer_loop_mode = False
+                if self.plus_plus:
+                    # MAML++: Multi-Step Loss (MSL) optimization
+                    # Compute loss at each inner loop step and average them
+                    query_losses = []
+
+                    # Start from current model parameters
+                    fast_weights = {}
+                    for name, param in self.model.named_parameters():
+                        fast_weights[name] = param.clone()
+                    
+                    # Yield intermediate weights for Multi-Step Loss
+                    for step in range(self.inner_steps):
+                        logits = self.forward_with_weights(support_data, fast_weights)
+                        loss = F.cross_entropy(logits, support_labels)
+                        
+                        # Compute gradients (always with computational graph for MAML++)
+                        grads = torch.autograd.grad(
+                            loss, 
+                            fast_weights.values(), 
+                            create_graph=True,
+                            allow_unused=False
+                        )
+                        
+                        # OPTIMIZED: JIT-compiled vectorized parameter update
+                        param_list = list(fast_weights.values())
+                        alpha_list = list(self.alpha)
+                        grad_list = list(grads)
+
+                        # JIT-compiled fast path for parameter updates
+                        updated_params = vectorized_param_update(param_list, grad_list, alpha_list)
+                        
+                        # Reconstruct dictionary using pre-computed names
+                        fast_weights = dict(zip(self.param_names, updated_params))
+
+                        # Outer loop evaluation WITHOUT dropout using context manager
+                        if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
+                            self.model._outer_loop_mode = True
+                            query_logits = self.forward_with_weights(query_data, fast_weights)
+                            self.model._outer_loop_mode = False
+                        
+                        else:
+                            # No Meta Dropout available - use full network
+                            query_logits = self.forward_with_weights(query_data, fast_weights)
+                        
+                        # Compute loss and append (always, regardless of dropout)
+                        query_loss = F.cross_entropy(query_logits, query_labels)
+                        query_losses.append(query_loss)
+
+                    # Multi-Step Loss: Average losses from all inner steps
+                    query_loss = torch.stack(query_losses).mean()
+
                 else:
-                    # No Meta Dropout available - use full network
-                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    # Standard MAML: only use final adapted parameters
+                    fast_weights = self.inner_update(support_data, support_labels)
+                    
+                    # Outer loop evaluation WITHOUT dropout using direct flag (zero overhead)
+                    if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
+                        self.model._outer_loop_mode = True
+                        query_logits = self.forward_with_weights(query_data, fast_weights)
+                        self.model._outer_loop_mode = False
+                    else:
+                        # No Meta Dropout available - use full network
+                        query_logits = self.forward_with_weights(query_data, fast_weights)
+                    
                     query_loss = F.cross_entropy(query_logits, query_labels)
                 
                 # Backward pass (accumulates gradients through inner loop)
@@ -633,9 +805,16 @@ class ModelAgnosticMetaLearning:
                 # Accumulate loss on GPU
                 meta_loss_sum += query_loss.detach()
         
-        # Clip gradients and update (same for both MAML and FOMAML)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-        self.meta_optimizer.step()
+        # Clip gradients and update (only for MAML and FOMAML, not Reptile)
+        if not self.use_reptile:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            self.meta_optimizer.step()
+            
+            # Clamp alpha learning rates after gradient step (MAML++ only)
+            if self.plus_plus:
+                with torch.no_grad():
+                    for alpha_param in self.alpha:
+                        alpha_param.clamp_(1e-6, 1.0)
         
         # Only single GPU→CPU transfer at the very end
         return (meta_loss_sum / batch_size).item()
@@ -654,6 +833,7 @@ def train_maml(
     optimizer_cls: type = optim.Adam,
     optimizer_kwargs: dict = None,
     first_order: bool = False,
+    plus_plus: bool = False,
     use_amp: bool = True
 ):
     """
@@ -741,6 +921,12 @@ def train_maml(
             - FOMAML: ~30-50% faster training, ~50% less memory
             - FOMAML: Typically 1-3% lower accuracy than full MAML
             - FOMAML: Recommended for larger models or resource constraints
+
+        plus_plus (bool, optional):
+            Whether to use MAML++ (MAML Plus Plus) enhancements.
+            Default: False (use vanilla MAML)
+
+            Note: MAML++ does not support FOMAML. If plus_plus=True, then first_order must be False.
 
         use_amp (bool, optional):
             Whether to use Automatic Mixed Precision (AMP) for training.
@@ -835,7 +1021,8 @@ def train_maml(
         inner_steps=inner_steps,
         optimizer_cls=optimizer_cls,
         optimizer_kwargs=optimizer_kwargs,
-        first_order=first_order
+        first_order=first_order,
+        plus_plus=plus_plus
     )
     
     algorithm_name = "FOMAML" if first_order else "MAML"
@@ -903,3 +1090,13 @@ def train_maml(
     
     print(f"\nTraining completed! Final loss: {np.mean(losses[-100:]):.4f}")
     return model, maml, losses
+
+
+@torch.jit.script
+def vectorized_param_update(
+    params: list[torch.Tensor], 
+    grads: list[torch.Tensor], 
+    alphas: list[torch.Tensor]
+) -> list[torch.Tensor]:
+    """JIT-compiled vectorized parameter update."""
+    return [p - a * g for p, a, g in zip(params, alphas, grads)]
