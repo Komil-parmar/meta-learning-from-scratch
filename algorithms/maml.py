@@ -166,6 +166,8 @@ class ModelAgnosticMetaLearning:
         optimizer_cls: type = optim.Adam, 
         optimizer_kwargs: dict = None,
         first_order: bool = False,
+        use_reptile: bool = False,
+        algorithm: str = None,
         plus_plus: bool = False,
         meta_sgd: bool = False
     ):
@@ -246,16 +248,44 @@ class ModelAgnosticMetaLearning:
                 Note: Meta-SGD increases (doubles) the number of parameters and may require
                 more careful tuning of outer_lr.
         """
+        # Handle algorithm parameter (takes precedence over boolean flags)
+        if algorithm is not None:
+            valid_algorithms = ['maml', 'fomaml', 'reptile']
+            if algorithm not in valid_algorithms:
+                raise ValueError(
+                    f"Invalid algorithm '{algorithm}'. Must be one of {valid_algorithms}"
+                )
+            self.algorithm = algorithm
+            # Set flags based on algorithm
+            # Reptile is also first-order (doesn't use second-order gradients)
+            self.first_order = (algorithm != 'maml')
+            self.use_reptile = (algorithm == 'reptile')
+        else:
+            # Use boolean flags to determine algorithm
+            self.first_order = first_order
+            self.use_reptile = use_reptile
+            
+            # Infer algorithm name from flags
+            if use_reptile:
+                self.algorithm = 'reptile'
+            elif first_order:
+                self.algorithm = 'fomaml'
+            else:
+                self.algorithm = 'maml'
+        
         self.model = model
         self.inner_lr = inner_lr
         self.outer_lr = outer_lr
         self.inner_steps = inner_steps
-        self.first_order = first_order
         self.plus_plus = plus_plus
         self.meta_sgd = meta_sgd
 
         if self.plus_plus and self.first_order:
             raise ValueError("MAML++ does not support FOMAML. Set first_order=False when plus_plus=True.")
+        
+        if self.plus_plus and self.use_reptile:
+            raise ValueError("MAML++ does not support Reptile. Set plus_plus=False when use_reptile=True.")
+        
         # if self.meta_sgd and self.first_order:
             # raise ValueError("Meta-SGD does not support FOMAML. Set first_order=False when meta_sgd=True.")
 
@@ -428,7 +458,7 @@ class ModelAgnosticMetaLearning:
 
             else:
                 # Standard MAML: Use fixed learning rate (pre-computed outside loop)
-                fast_weights = vectorized_param_update(
+                updated_weights = vectorized_param_update(
                     list(fast_weights.values()),
                     grads, 
                     inner_lr_list
@@ -624,7 +654,53 @@ class ModelAgnosticMetaLearning:
         
         batch_size = support_data_batch.size(0)
         
-        if self.first_order:
+        if self.use_reptile:
+            # REPTILE: Parameter interpolation (no outer loop gradients needed!)
+            # This is why Reptile is ~2x faster than MAML - no backprop through outer loop
+            for i in range(batch_size):
+                support_data = support_data_batch[i]
+                support_labels = support_labels_batch[i]
+                query_data = query_data_batch[i]
+                query_labels = query_labels_batch[i]
+                
+                # Reset Meta Dropout masks for this task (if model supports it)
+                if hasattr(self.model, 'reset_dropout_masks'):
+                    task_batch_size = support_data.size(0)
+                    self.model.reset_dropout_masks(task_batch_size, device)
+                
+                # Store original parameters before adaptation
+                original_params = {name: param.clone() 
+                                 for name, param in self.model.named_parameters()}
+                
+                # Inner loop: Adapt to task (multiple SGD steps on support set)
+                fast_weights = self.inner_update(support_data, support_labels)
+                
+                # Evaluate on query set for logging (optional, just for monitoring)
+                if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
+                    self.model._outer_loop_mode = True
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
+                    self.model._outer_loop_mode = False
+                else:
+                    query_logits = self.forward_with_weights(query_data, fast_weights)
+                    query_loss = F.cross_entropy(query_logits, query_labels)
+                
+                # Accumulate loss for logging
+                meta_loss_sum += query_loss.detach()
+                
+                # REPTILE UPDATE: Interpolate between original and adapted parameters
+                # θ ← θ + ε(θ' - θ) where θ' is adapted parameters, ε is outer_lr
+                # This is equivalent to: θ ← (1-ε)θ + εθ'
+                with torch.no_grad():
+                    for (name, param), adapted_param in zip(self.model.named_parameters(), 
+                                                            fast_weights.values()):
+                        # Compute interpolation: move towards adapted parameters
+                        param.data.add_(adapted_param - original_params[name], 
+                                      alpha=self.outer_lr / batch_size)
+            
+            # Note: No optimizer step needed for Reptile - we update parameters directly!
+            
+        elif self.first_order:
             # FOMAML: First-order approximation
             # Treat adapted parameters as independent of meta-parameters
             for i in range(batch_size):
@@ -650,7 +726,7 @@ class ModelAgnosticMetaLearning:
                 # Outer loop: Compute query loss WITHOUT dropout using context manager
                 # This is Meta Dropout Option 2: dropout only in inner loop
                 # ⚡ ULTRA-OPTIMIZED: Context manager just sets a boolean flag (zero overhead!)
-                if self.model.use_meta_dropout:
+                if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
                     self.model._outer_loop_mode = True  # Enable outer loop mode (skips dropout)
                     query_logits = self.forward_with_weights(query_data, fast_weights)
                     query_loss = F.cross_entropy(query_logits, query_labels)
@@ -725,7 +801,7 @@ class ModelAgnosticMetaLearning:
                         fast_weights = dict(zip(self.param_names, updated_params))
 
                         # Outer loop evaluation WITHOUT dropout using context manager
-                        if self.model.use_meta_dropout:
+                        if hasattr(self.model, 'use_meta_dropout') and self.model.use_meta_dropout:
                             self.model._outer_loop_mode = True
                             query_logits = self.forward_with_weights(query_data, fast_weights)
                             self.model._outer_loop_mode = False
