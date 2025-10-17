@@ -17,6 +17,8 @@ Reference:
 """
 
 from typing import Generator, Union
+
+from pkg_resources import require
 import numpy as np
 import torch
 import torch.optim as optim
@@ -166,7 +168,8 @@ class ModelAgnosticMetaLearning:
         first_order: bool = False,
         use_reptile: bool = False,
         algorithm: str = None,
-        plus_plus: bool = False
+        plus_plus: bool = False,
+        meta_sgd: bool = False
     ):
         """
         Initialize the MAML algorithm.
@@ -219,26 +222,6 @@ class ModelAgnosticMetaLearning:
                 FOMAML is typically 30-50% faster and uses ~50% less memory than MAML,
                 with only a small decrease in final performance (usually 1-3% accuracy).
 
-            use_reptile (bool, optional):
-                Whether to use Reptile algorithm instead of MAML/FOMAML.
-                Default: False (use MAML or FOMAML based on first_order flag)
-                
-                - False: Use MAML (if first_order=False) or FOMAML (if first_order=True)
-                - True: Use Reptile algorithm with parameter interpolation
-                
-                Reptile is typically 2x faster than MAML and doesn't require gradients
-                in the outer loop. Note: When use_reptile=True, outer_lr typically
-                needs to be 10-100x larger (e.g., 0.1 instead of 0.001).
-            
-            algorithm (str, optional):
-                Algorithm variant to use: 'maml', 'fomaml', or 'reptile'.
-                If provided, this overrides first_order and use_reptile parameters.
-                Default: None (use first_order and use_reptile parameters)
-                
-                - 'maml': Full MAML with second-order gradients (first_order=False, use_reptile=False)
-                - 'fomaml': First-Order MAML (first_order=True, use_reptile=False)
-                - 'reptile': Reptile algorithm (use_reptile=True)
-
             plus_plus (bool, optional):
                 Whether to use MAML++ (MAML Plus Plus) enhancements.
                 Default: False (use vanilla MAML)
@@ -252,20 +235,18 @@ class ModelAgnosticMetaLearning:
                 challenging few-shot learning scenarios.
 
                 NOTE: MAML++ does not support FOMAML. If plus_plus=True, then first_order must be False.
-        
-        Raises:
-            ValueError: If algorithm is not one of ['maml', 'fomaml', 'reptile', None]
-        
-        Examples:
-            >>> # Method 1: Using boolean flags
-            >>> maml = ModelAgnosticMetaLearning(model, first_order=False, use_reptile=False)  # MAML
-            >>> fomaml = ModelAgnosticMetaLearning(model, first_order=True, use_reptile=False)  # FOMAML
-            >>> reptile = ModelAgnosticMetaLearning(model, use_reptile=True)  # Reptile
-            
-            >>> # Method 2: Using algorithm parameter
-            >>> maml = ModelAgnosticMetaLearning(model, algorithm='maml')
-            >>> fomaml = ModelAgnosticMetaLearning(model, algorithm='fomaml')
-            >>> reptile = ModelAgnosticMetaLearning(model, algorithm='reptile')
+
+            meta_sgd (bool, optional):
+                Whether to use Meta-SGD, which learns per-parameter learning rates
+                for the inner loop updates. This can improve adaptation speed.
+                Default: False (use fixed inner_lr for all parameters)
+                
+                When enabled, each parameter will have its own learnable learning rate,
+                initialized to inner_lr. This allows the model to learn how quickly
+                to adapt each parameter during task-specific fine-tuning.
+                
+                Note: Meta-SGD increases (doubles) the number of parameters and may require
+                more careful tuning of outer_lr.
         """
         # Handle algorithm parameter (takes precedence over boolean flags)
         if algorithm is not None:
@@ -297,12 +278,16 @@ class ModelAgnosticMetaLearning:
         self.outer_lr = outer_lr
         self.inner_steps = inner_steps
         self.plus_plus = plus_plus
+        self.meta_sgd = meta_sgd
 
         if self.plus_plus and self.first_order:
             raise ValueError("MAML++ does not support FOMAML. Set first_order=False when plus_plus=True.")
-
+        
         if self.plus_plus and self.use_reptile:
             raise ValueError("MAML++ does not support Reptile. Set plus_plus=False when use_reptile=True.")
+        
+        # if self.meta_sgd and self.first_order:
+            # raise ValueError("Meta-SGD does not support FOMAML. Set first_order=False when meta_sgd=True.")
 
         if self.plus_plus:
             # Pre-compute and cache parameter names for efficient dictionary reconstruction
@@ -328,7 +313,26 @@ class ModelAgnosticMetaLearning:
             if optimizer_kwargs is None:
                 optimizer_kwargs = {}
             self.meta_optimizer = optimizer_cls(self.model.parameters(), lr=outer_lr, **optimizer_kwargs)
-        
+
+        if self.meta_sgd:
+            # Initialize per-parameter learning rates for Meta-SGD
+            # Each parameter tensor gets its own learning rate tensor with the same shape
+            # This gives us one learnable learning rate for each individual weight/bias
+            self.meta_sgd_lrs = torch.nn.ParameterList([
+                torch.nn.Parameter(
+                    torch.full_like(param, self.inner_lr, dtype=torch.float32),
+                    requires_grad=True
+                ) 
+                for param in self.model.parameters()
+            ])
+            
+            # Add meta_sgd_lrs to meta-optimizer
+            self.meta_optimizer = optimizer_cls(
+                list(self.model.parameters()) + list(self.meta_sgd_lrs.parameters()),
+                lr=outer_lr,
+                **optimizer_kwargs
+            )
+
     def inner_update(self, support_data: torch.Tensor, support_labels: torch.Tensor) -> dict:
         """
         Perform inner loop adaptation on a task's support set.
@@ -409,30 +413,60 @@ class ModelAgnosticMetaLearning:
         self.model.train()
         
         # Start from current model parameters
+        # Pre-compute parameter names and initial values (avoid repeated dict operations)
         fast_weights = {}
         for name, param in self.model.named_parameters():
             fast_weights[name] = param.clone()
-        
+
+        if self.meta_sgd:
+            fast_sgd_lrs = {}
+            for name, param in self.meta_sgd_lrs.named_parameters():
+                fast_sgd_lrs[name] = param.clone()
+        else:
+            # Pre-compute inner learning rate list (fixed for all steps)
+            inner_lr_list = [torch.tensor(self.inner_lr, dtype=torch.float32, device=support_data.device) 
+                             for _ in fast_weights]
+
         # Perform multiple gradient steps
         for step in range(self.inner_steps):
             logits = self.forward_with_weights(support_data, fast_weights)
             loss = F.cross_entropy(logits, support_labels)
             
             # Compute gradients
-            # Key difference: create_graph=True for MAML, False for FOMAML
+            # For Meta-SGD: ALWAYS use create_graph=True to allow alpha to learn
+            # For regular MAML/FOMAML: create_graph depends on first_order flag
+            create_graph = (not self.first_order) or self.meta_sgd
+            
+            # Only compute gradients w.r.t. fast_weights (not learning rates!)
+            # Learning rates are hyperparameters, not part of the computation graph
             grads = torch.autograd.grad(
                 loss, 
                 fast_weights.values(), 
-                create_graph=not self.first_order,  # False for FOMAML, True for MAML
+                create_graph=create_graph,
                 allow_unused=False
             )
             
-            # Update fast weights with fixed learning rate
-            fast_weights = {
-                name: param - self.inner_lr * grad
-                for (name, param), grad in zip(fast_weights.items(), grads)
-            }
-        
+            # Update fast weights (vectorized, no dict operations!)
+            if self.meta_sgd:
+                # Meta-SGD: Use learnable per-parameter learning rates
+                updated_weights = vectorized_param_update(
+                    list(fast_weights.values()),
+                    grads,
+                    list(fast_sgd_lrs.values())
+                )
+                fast_weights = dict(zip(fast_weights.keys(), updated_weights))
+
+            else:
+                # Standard MAML: Use fixed learning rate (pre-computed outside loop)
+                updated_weights = vectorized_param_update(
+                    list(fast_weights.values()),
+                    grads, 
+                    inner_lr_list
+                )
+                fast_weights = dict(zip(fast_weights.keys(), updated_weights))
+
+
+        # Only create final dictionary once after all inner steps
         return fast_weights
     
     def forward_with_weights(self, x: torch.Tensor, weights: dict) -> torch.Tensor:
@@ -805,16 +839,15 @@ class ModelAgnosticMetaLearning:
                 # Accumulate loss on GPU
                 meta_loss_sum += query_loss.detach()
         
-        # Clip gradients and update (only for MAML and FOMAML, not Reptile)
-        if not self.use_reptile:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.meta_optimizer.step()
-            
-            # Clamp alpha learning rates after gradient step (MAML++ only)
-            if self.plus_plus:
-                with torch.no_grad():
-                    for alpha_param in self.alpha:
-                        alpha_param.clamp_(1e-6, 1.0)
+        # Clip gradients and update (same for both MAML and FOMAML)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        self.meta_optimizer.step()
+        
+        # Clamp alpha learning rates after gradient step (MAML++ only)
+        if self.plus_plus:
+            with torch.no_grad():
+                for alpha_param in self.alpha:
+                    alpha_param.clamp_(1e-6, 1.0)
         
         # Only single GPU→CPU transfer at the very end
         return (meta_loss_sum / batch_size).item()
@@ -834,6 +867,7 @@ def train_maml(
     optimizer_kwargs: dict = None,
     first_order: bool = False,
     plus_plus: bool = False,
+    meta_sgd: bool = False,
     use_amp: bool = True
 ):
     """
@@ -927,6 +961,18 @@ def train_maml(
             Default: False (use vanilla MAML)
 
             Note: MAML++ does not support FOMAML. If plus_plus=True, then first_order must be False.
+
+        meta_sgd (bool, optional):
+            Whether to use Meta-SGD, which learns per-parameter learning rates
+            for the inner loop updates. This can improve adaptation speed.
+            Default: False (use fixed inner_lr for all parameters)
+            
+            When enabled, each parameter will have its own learnable learning rate,
+            initialized to inner_lr. This allows the model to learn how quickly
+            to adapt each parameter during task-specific fine-tuning.
+            
+            Note: Meta-SGD increases (doubles) the number of parameters and may require
+            more careful tuning of outer_lr.
 
         use_amp (bool, optional):
             Whether to use Automatic Mixed Precision (AMP) for training.
@@ -1022,7 +1068,9 @@ def train_maml(
         optimizer_cls=optimizer_cls,
         optimizer_kwargs=optimizer_kwargs,
         first_order=first_order,
-        plus_plus=plus_plus
+        plus_plus=plus_plus,
+        meta_sgd=meta_sgd,
+        # use_amp=use_amp
     )
     
     algorithm_name = "FOMAML" if first_order else "MAML"
