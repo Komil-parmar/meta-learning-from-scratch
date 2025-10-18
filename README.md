@@ -169,11 +169,31 @@ A state-of-the-art meta-learning algorithm that learns to adapt to new tasks by 
 
 **Documentation:** See [LEO Guide](docs/LEO.md), [LEO README](LEO_README.md), and [MAML vs LEO Comparison](docs/MAML_vs_LEO.md)
 
+### ✅ TAML (Task Agnostic Meta Learning)
+A meta-learning algorithm designed to prevent overfitting to meta-training tasks by learning task-agnostic initializations and adaptation mechanisms. TAML uses a shared CNN feature extractor and adapts only the final layers for each task, leveraging an encoder, relation network, and decoder to process support examples and generate modulations and learning rates for adaptation.
+
+**Key Features:**
+- **Task-agnostic adaptation**: Prevents overfitting to meta-training tasks
+- **Efficient inner loop**: Only adapts head parameters, not the full network
+- **Relation network**: Refines class codes using cross-class relationships
+- **Flexible modulations**: Decoder can output global or per-layer scaling factors
+- **Shared feature extractor**: CNN backbone is meta-learned and shared
+- [Original Paper](https://arxiv.org/abs/1905.03684)
+
+**Performance (5-way 1-shot Omniglot):**
+- Speed: ~3.3s/iteration
+- Final Loss: < 0.6
+- Evaluation Accuracy: ~73% (std: 14%)
+
+**Key Insights:**
+- Current results show good final loss but moderate evaluation accuracy, indicating some meta-overfitting
+- Further optimization and hyperparameter tuning are needed to match or surpass state-of-the-art algorithms
+- Vectorization of some steps could improve speed and efficiency
+
+**Documentation:** See [TAML Guide](docs/TAML.md)
 ### 🚧 Coming Soon
 - Prototypical Networks
-- Matching Networks
-- Reptile
-- Relation Networks
+- CAVIA
 
 ## 🗂️ Repository Structure
 
@@ -182,6 +202,8 @@ meta-learning-from-scratch/
 ├── algorithms/                  # Core algorithm implementations
 │   ├── maml.py                  # MAML, FOMAML & Meta-SGD implementation
 │   ├── anil.py                  # ANIL implementation (4 training scenarios)
+│   ├── leo.py                  # LEO implementation
+│   ├── taml.py                  # TAML implementation
 │   ├── eb_meta_network.py       # Embedding-based Meta Networks
 │   ├── original_meta_network.py # Original Meta Networks (model-based)
 │   ├── embedding_network.py     # Shared CNN feature extractor
@@ -201,9 +223,11 @@ meta-learning-from-scratch/
 │   ├── MAML_vs_FOMAML_vs_MAMLpp.md # MAML, FOMAML, and Meta-SGD comparison
 │   ├── META_SGD.md              # Meta-SGD comprehensive guide
 │   ├── ANIL.md                  # ANIL comprehensive guide (4 scenarios)
+│   ├── LEO.md                   # LEO comprehensive guide
+│   ├── TAML.md                  # TAML comprehensive guide
 │   ├── META_DROPOUT_USAGE.md    # Meta Dropout usage guide
 │   ├── PREFETCHED_DATASET.md    # Prefetched dataset guide (10-50x faster!)
-│   ├── META_NETWORKS_OVERVIEW.md        # Embedding-based Meta Networks guide
+│   ├── META_NETWORKS_OVERVIEW.md      # Embedding-based Meta Networks guide
 │   ├── ORIGINAL_META_NETWORK_OVERVIEW.md # Original Meta Networks guide
 │   └── META_DROPOUT_IN_META_NETWORKS.md # Meta Dropout integration (both variants)
 ├── examples/                    # Tutorial notebooks and scripts
