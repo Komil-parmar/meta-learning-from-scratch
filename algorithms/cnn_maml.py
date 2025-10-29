@@ -13,7 +13,7 @@ from algorithms.meta_dropout import MetaDropout
 
 class SimpleConvNet(nn.Module):
     """Simple CNN for Omniglot classification with optimized Meta Dropout support.
-    
+
     Architecture:
     - 4 convolutional layers (64 filters, 3x3 kernel)
     - Batch normalization after each conv
@@ -100,19 +100,19 @@ class SimpleConvNet(nn.Module):
         # Network layers
         # Layer 1
         self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(64)
+        self.ln1 = nn.LayerNorm([64, 105, 105])  # LayerNorm for vmap compatibility
 
         # Layer 2
         self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(64)
-        
+        self.ln2 = nn.LayerNorm([64, 52, 52])
+
         # Layer 3
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(64)
+        self.ln3 = nn.LayerNorm([64, 26, 26])
 
         # Layer 4
         self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(64)
+        self.ln4 = nn.LayerNorm([64, 13, 13])
         
         # Fully connected
         self.fc = nn.Linear(64 * 6 * 6, num_classes)
@@ -160,14 +160,14 @@ class SimpleConvNet(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through the network with conditional dropout.
-        
+
         Dropout is skipped when _outer_loop_mode=True, implementing Meta Dropout
         Option 2: dropout only during inner loop adaptation, full network during
         outer loop evaluation.
         """
         # Layer 1
         x = self.conv1(x)
-        x = self.bn1(x)
+        x = self.ln1(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
         if not self._outer_loop_mode:
@@ -175,7 +175,7 @@ class SimpleConvNet(nn.Module):
 
         # Layer 2
         x = self.conv2(x)
-        x = self.bn2(x)
+        x = self.ln2(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
         if not self._outer_loop_mode:
@@ -183,7 +183,7 @@ class SimpleConvNet(nn.Module):
 
         # Layer 3
         x = self.conv3(x)
-        x = self.bn3(x)
+        x = self.ln3(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
         if not self._outer_loop_mode:
@@ -191,7 +191,7 @@ class SimpleConvNet(nn.Module):
 
         # Layer 4
         x = self.conv4(x)
-        x = self.bn4(x)
+        x = self.ln4(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
         if not self._outer_loop_mode:
@@ -200,6 +200,68 @@ class SimpleConvNet(nn.Module):
         # Fully connected
         x = torch.flatten(x, 1)
         x = self.fc(x)
+        return x
+
+    def stateless_forward(self, x: torch.Tensor, weights: list) -> torch.Tensor:
+        """Stateless forward pass using provided weights (for MAML inner loop).
+
+        Uses LayerNorm instead of BatchNorm for vmap compatibility.
+        Dropout behavior is consistent with standard forward method.
+
+        Weight indices:
+        - weights[0:2]: conv1 (weight, bias)
+        - weights[2:4]: ln1 (weight, bias)
+        - weights[4:6]: conv2 (weight, bias)
+        - weights[6:8]: ln2 (weight, bias)
+        - weights[8:10]: conv3 (weight, bias)
+        - weights[10:12]: ln3 (weight, bias)
+        - weights[12:14]: conv4 (weight, bias)
+        - weights[14:16]: ln4 (weight, bias)
+        - weights[16:18]: fc (weight, bias)
+
+        Args:
+            x: Input tensor
+            weights: List of weights to use for the forward pass
+
+        Returns:
+            Output logits tensor
+        """
+        # Layer 1
+        x = F.conv2d(x, weights[0], weights[1], padding=1)
+        # Apply LayerNorm with learnable affine parameters
+        x = F.layer_norm(x, (64, 105, 105), weight=weights[2], bias=weights[3])
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        if not self._outer_loop_mode:
+            x = self.dropout1(x)
+
+        # Layer 2
+        x = F.conv2d(x, weights[4], weights[5], padding=1)
+        x = F.layer_norm(x, (64, 52, 52), weight=weights[6], bias=weights[7])
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        if not self._outer_loop_mode:
+            x = self.dropout2(x)
+
+        # Layer 3
+        x = F.conv2d(x, weights[8], weights[9], padding=1)
+        x = F.layer_norm(x, (64, 26, 26), weight=weights[10], bias=weights[11])
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        if not self._outer_loop_mode:
+            x = self.dropout3(x)
+
+        # Layer 4
+        x = F.conv2d(x, weights[12], weights[13], padding=1)
+        x = F.layer_norm(x, (64, 13, 13), weight=weights[14], bias=weights[15])
+        x = F.relu(x)
+        x = F.max_pool2d(x, 2)
+        if not self._outer_loop_mode:
+            x = self.dropout4(x)
+
+        # Fully connected
+        x = torch.flatten(x, 1)
+        x = F.linear(x, weights[16], weights[17])
         return x
     
     def get_dropout_info(self) -> dict:
